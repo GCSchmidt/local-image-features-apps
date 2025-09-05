@@ -6,3 +6,10 @@ This is a project where I implement solutions leveraging local image features to
 4. Indexing and Database Retrieval
 5. 3D Reconstruction
 6. Robot Navigation
+
+## Setup
+Follow the following steps after cloning the repo:
+
+```
+python3 setup.py && source .venv/bin/activate
+```
