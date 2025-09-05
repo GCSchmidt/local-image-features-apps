@@ -1,0 +1,4 @@
+.venv
+image-stitching/datasets/example-data
+.jpg
+.png
