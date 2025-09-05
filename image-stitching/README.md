@@ -1,7 +1,7 @@
 # Image Stitching Application
 This directory contains the implementation for the **Image Stitching Application** to create panoramas.
 
-## Useful sources
+## Useful Resources
 1. [Potential datasets](https://github.com/visionxiang/Image-Stitching-Dataset?tab=readme-ov-file)
 2. [Image Sticthing with openCV](https://pyimagesearch.com/2018/12/17/image-stitching-with-opencv-and-python/)
 3. [OpenCV panorama stitching](https://pyimagesearch.com/2016/01/11/opencv-panorama-stitching/)
@@ -12,9 +12,14 @@ This directory contains the implementation for the **Image Stitching Application
 2. Speed requirements
 3. Accuracy req requirements
 
+## The Dataset
+**Source:** The dataset was found at: https://github.com/ppwwyyxx/OpenPano/releases/tag/0.1.
+
+**Details:** It contains 8 sets of images for panorama stitching, and the number of images for each set ranges from 4 to 38.
+
 ## TODOs
-1. Find a suitable dataset to develop a soultion for.
+1. Find a suitable dataset to develop a soultion for
 2. Determine Goals/Objective
-3. Implement image stitching solution.
+3. Implement image stitching solution
 4. Check if Goals / Objectives are met
 
