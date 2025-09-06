@@ -7,6 +7,13 @@ This directory contains the implementation for the **Image Stitching Application
 3. [OpenCV panorama stitching](https://pyimagesearch.com/2016/01/11/opencv-panorama-stitching/)
 4. [Real-time panorama and image stitching with OpenCV](https://pyimagesearch.com/2016/01/25/real-time-panorama-and-image-stitching-with-opencv/)
 
+## Important Notes 
+
+- **File naming requirement**: Input files must be named with numerical suffixes that specify the stitching order (e.g., "image_001.jpg", "photo_4.png"). This naming convention allows the application to determine the correct sequence for panorama creation without performing complex feature matching between images to establish adjacency. 
+
+- **Future enhancement**: A planned improvement is to make the application more robust by implementing automatic image ordering through feature detection and matching, eliminating the current dependency on sequential file naming.
+
+
 ## Goals / Objectives
 1. TO BE DEFINED
 2. Speed requirements
