@@ -6,6 +6,7 @@ This directory contains the implementation for the **Image Stitching Application
 2. [Image Sticthing with openCV](https://pyimagesearch.com/2018/12/17/image-stitching-with-opencv-and-python/)
 3. [OpenCV panorama stitching](https://pyimagesearch.com/2016/01/11/opencv-panorama-stitching/)
 4. [Real-time panorama and image stitching with OpenCV](https://pyimagesearch.com/2016/01/25/real-time-panorama-and-image-stitching-with-opencv/)
+5. [Tips on multiple image stitching](https://stackoverflow.com/questions/24563173/stitch-multiple-images-using-opencv-python) 
 
 ## Important Notes 
 
