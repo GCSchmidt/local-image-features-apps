@@ -1,0 +1,7 @@
+[project]
+name = "local_image_features_apps"
+version = "0.1.0"
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
