@@ -1,5 +1,5 @@
 .venv
-image-stitching/datasets/example-data
+src/image-stitching/datasets/example-data
 .jpg
 .png
 __pycache__
