@@ -1,5 +1,12 @@
 .venv
 src/image-stitching/datasets/example-data
-.jpg
-.png
-__pycache__
+
+# Python package files
+*.egg-info/
+dist/
+build/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
