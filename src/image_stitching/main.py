@@ -1,13 +1,19 @@
 import argparse
 import cv2
 import numpy as np
-from models import Panorama
+import utils.file_utils as file_utils
+from image_stitching.models import Panorama, StitchedImage
 
 
 def main(args):
     panorama = Panorama(args.folder_path)
     panorama.generate_panorama()
     panorama.match_stats()
+
+    paths = file_utils.get_image_files("/home/schmidtg/coding_projetcs/local-image-features-apps/src/image_stitching/datasets/example-data/myself")
+    SI = StitchedImage(paths)
+    SI.display()
+    SI.save()
     return
 
 

@@ -1,6 +1,9 @@
 import os
 import re
 
+LOG_PATH = r'/home/schmidtg/coding_projetcs/local-image-features-apps/logs/'
+OUTPUT_PATH = r'/home/schmidtg/coding_projetcs/local-image-features-apps/output/'
+
 
 def get_image_files(path: str) -> list:
     """Returns a list of image files inside path."""

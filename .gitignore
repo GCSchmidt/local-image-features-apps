@@ -8,6 +8,8 @@ build/
 
 # File types
 *.Identifier
+*.jpg
+*.png
 
 # Python cache
 __pycache__/
