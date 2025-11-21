@@ -14,7 +14,6 @@ This directory contains the implementation for the **Image Stitching Application
 
 - **Future enhancement**: A planned improvement is to make the application more robust by implementing automatic image ordering through feature detection and matching, eliminating the current dependency on sequential file naming.
 
-
 ## Goals / Objectives
 1. TO BE DEFINED
 2. Speed requirements
@@ -31,3 +30,9 @@ This directory contains the implementation for the **Image Stitching Application
 3. Implement image stitching solution
 4. Check if Goals / Objectives are met
 
+## Run the Code
+
+Run with 
+```
+python3 src/image_stitching/main.py src/image_stitching/datasets/example-data/myself
+```
