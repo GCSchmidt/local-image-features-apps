@@ -8,21 +8,29 @@ from pathlib import Path
 from dataclasses import dataclass
 from utils import file_utils
 
-logger = logging.getLogger(__name__)
-log_path = os.path.join(file_utils.LOG_PATH, r'image_stitching/models.log')
-logging.basicConfig(filename=log_path, level=logging.DEBUG)
-logger.info('Started')
 
 MIN_MATCH_COUNT = 10
 
-@dataclass
-class MatchResult:
-    img1: str
-    img2: str
-    n_feats1: int
-    n_feats2: int
-    n_inliers: int
-    percent_in: float
+
+# Create a logger for this module
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+logger.propagate = False
+
+# Create a file handler (unique to this module)
+log_path = os.path.join(file_utils.LOG_PATH, 'image_stitching/models.log')
+file_handler = logging.FileHandler(log_path, mode='w')  # overwrite/replace the file 
+file_handler.setLevel(logging.DEBUG)
+
+# Optional formatter
+formatter = logging.Formatter(
+    '%(asctime)s - %(filename)s:%(lineno)d - %(levelname)s\n%(message)s'
+)
+file_handler.setFormatter(formatter)
+
+# Add the handler if not already added (to avoid duplicates)
+if not logger.handlers:
+    logger.addHandler(file_handler)
 
 
 class StitchedImage():
@@ -34,13 +42,17 @@ class StitchedImage():
         N = len(self.img_paths)
         self.homographies = np.tile(np.identity(3), (N, 1, 1))
         self.final_img = cv2.imread(img_paths[0], cv2.IMREAD_COLOR_BGR)
-        
-    def add_image(self, img_id: int):
+        self.connected = set([0])
+
+    def is_connected(self, img_id:int) -> bool:
+        return (img_id in self.connected)
+
+    def stitch_image(self, img_id: int):
         H = self.homographies[img_id]
         
         h1, w1 = self.final_img.shape[:2]
 
-        new_img_path = self.img_paths[img_id-1]
+        new_img_path = self.img_paths[img_id]
         new_img = cv2.imread(new_img_path, cv2.IMREAD_COLOR_BGR)
         h2, w2 = new_img.shape[:2]
 
@@ -60,16 +72,60 @@ class StitchedImage():
         # Translation matrix to shift everything into positive coordinates
         translation = np.array([[1,0,-xmin],[0,1,-ymin],[0,0,1]])
 
-        final_img_copy = 0
+        final_img_copy = self.final_img.copy()
         # Warp new_img into canvas
         self.final_img = cv2.warpPerspective(new_img, translation @ H, (xmax - xmin, ymax - ymin))
         # Place the original/base final_img into canvas
         self.final_img[-ymin:h1 - ymin, -xmin:w1 - xmin] = final_img_copy
 
     def update_homography(self, img_id1: int, img_id2: int, H1_2: np.ndarray):
+        """
+        Use the transformation from img_id1 to img_id2, 
+        to update the transform from base to img_id2
+        Args:
+            img_id1 (int): reference 
+            img_id2 (int): target image
+            H1_2 (np.ndarray): _description_
+        """
+        if not self.is_connected(img_id2):
+            logger.debug(f"Failed to update homography of {img_id1} with the homography of {img_id2}." +
+                         f"Img {img_id2} not yet added to connected: {self.connected}")
+            return
         H2 = self.homographies[img_id2] # TF from img ID 2 to base  
         new_H = H2 @ H1_2
         self.homographies[img_id1] = new_H
+        h_list = [str(x) for x in self.homographies]
+        logger.debug("\n".join(h_list))
+        self.connected.add(img_id1)
+        logger.debug(f"Img {img_id1} connected via {img_id2}\nconnected set: {self.connected}")
+
+    def sticth_images(self):
+        def corners(img, H):
+            h, w = img.shape[:2]
+            pts = np.array([[0,0], [w,0], [w,h], [0,h]], np.float32).reshape(-1,1,2)
+            return cv2.perspectiveTransform(pts, H).reshape(-1,2)
+        
+        images = [cv2.imread(path, cv2.IMREAD_COLOR_BGR) for path in self.img_paths]
+        homographies = self.homographies
+
+        all_pts = np.vstack([corners(img, H) for img, H in zip(images, homographies)])
+        x_min, y_min = np.floor(all_pts.min(axis=0)).astype(int)
+        x_max, y_max = np.ceil(all_pts.max(axis=0)).astype(int)
+
+        trans = np.array([[1,0,-x_min],[0,1,-y_min],[0,0,1]], np.float64)
+        width, height = x_max - x_min, y_max - y_min
+
+        acc = np.zeros((height, width, 3), np.float32)
+        count = np.zeros((height, width, 1), np.float32)
+
+        for img, H in zip(images, homographies):
+            Ht = trans @ H
+            warped = cv2.warpPerspective(img, Ht, (width, height))
+            mask = (warped > 0).astype(np.float32)
+            acc += warped.astype(np.float32)
+            count += mask[..., :1]
+
+        self.final_img = np.divide(acc, np.maximum(count, 1), where=count>0).astype(np.uint8)
 
     def display(self):
         cv2.imshow('Sticthed Image', self.final_img)
@@ -80,6 +136,7 @@ class StitchedImage():
         output_path = os.path.join(file_utils.OUTPUT_PATH, r"stitched.jpg")
         success = cv2.imwrite(output_path, self.final_img)
 
+
 class Panorama():
 
     def __init__(self, path) -> None:
@@ -88,15 +145,16 @@ class Panorama():
         self.matching_df: pd.DataFrame
         self.img_id_bounds: np.ndarray
         self.K = 5  # find K-nearest neighbours during matching
-        self.M = 2  # number of best matched images to use per image
+        self.M = 1  # number of best matched images to use per image
         self.SI = StitchedImage(self.image_files)
 
     def generate_panorama(self):
         kps = self.detect()
-        logger.debug(f"type of kps from detect(): {type(kps)}, {type(kps[0])}")
         matches = self.match()
-        logger.debug(f"type of matches from detect(): {type(matches)}, {type(matches[0])}, {type(matches[0][0])}")
-        self.SI
+        img_connections_ranked = self.rank_image_connections()
+        formatted_data = "\n".join([f"{k}:{v}" for k, v in img_connections_ranked.items()])
+        logger.debug(f"img_connections_ranked:\n{formatted_data}")
+        self.stitch(img_connections_ranked, kps)
 
     def detect(self) -> tuple[cv2.KeyPoint]:
         """
@@ -120,7 +178,7 @@ class Panorama():
             N_new = len(des_new)
             N += N_new
             self.img_id_bounds = np.append(self.img_id_bounds, N)
-            img_ids_new = np.full((N_new), img_id+1)
+            img_ids_new = np.full((N_new), img_id)
             img_ids = np.concatenate((img_ids, img_ids_new), axis=0)
 
         self.generate_matching_df(des, img_ids)
@@ -178,11 +236,19 @@ class Panorama():
         """
         Get the associated Image ID for the given Descriptor ID, using img_id_bounds.
         Returns:
-            int: in range from 1 to length of bounds
+            int: in range from 0 to length of bounds - 1
         """
-        return np.searchsorted(self.img_id_bounds, id, side='right')
+        return np.searchsorted(self.img_id_bounds, id, side='right') - 1
 
-    def matched_ids_to_img_ids(self, row):
+    def matched_ids_to_img_ids(self, row) -> np.ndarray:
+        """Generate the img ids from the row's matched keypoint ids
+
+        Args:
+            row: a row from self.matching_df
+
+        Returns:
+            np.ndarray: ids of images belonging to keypoints in 'Matched_Ids'
+        """
         matched_ids = row['Matched_Ids']
         img_ids = [self.descriptor_id_to_img_id(id) for id in matched_ids]
         return np.array(img_ids)
@@ -229,15 +295,15 @@ class Panorama():
         )
         return result
     
-    def rank_image_connections(self):
+    def rank_image_connections(self) -> dict[int, list[int]]:
         temp_df = self.get_number_of_matches_per_image_pair()
-        image_connections_ranked = (
+        img_connections_ranked = (
             temp_df.sort_values(['ImgId', 'Count'], 
                                 ascending=[True, False]).groupby('ImgId')['MatchedWith'].apply(list).to_dict()
             )
+        return img_connections_ranked
 
-
-    def determine_connections(self, img_id1: int, img_id2: int, kps: list[cv2.KeyPoint],):
+    def determine_connections(self, img_id1: int, img_id2: int, kps: tuple[cv2.KeyPoint]):
         
         return H 
 
@@ -274,7 +340,7 @@ class Panorama():
             pandas dataframe: subset of matching_df
         """
         sub_matching_df = self.matching_df[
-            (self.matching_df["ImgId"] == img_id1) and
+            (self.matching_df["ImgId"] == img_id1) &
             (self.matching_df['Matched_ImgIds'].apply(lambda x: img_id2 in x))
             ]
         return sub_matching_df
@@ -298,6 +364,54 @@ class Panorama():
         valid_id = matched_ids[mask]  # reduce array with mask
         matched_pairs = [(kp_id_img1, int(kp_id_img2)) for kp_id_img2 in valid_id]
         return matched_pairs
+
+    def stitch(self, img_connections_ranked: dict, kps: tuple[cv2.KeyPoint]) -> None:
+        # img_id1, img_id2 = 1, 0  # hard coded pair got from img_connections_ranked
+        # matched_kp_ids = self.get_image_pair_matches(img_id1, img_id2)
+        # logger.debug(f"matched_kp_ids between {img_id1} and {img_id2}:\n{matched_kp_ids}")
+        # H = self.get_homogrphy(kps, matched_kp_ids)
+        # logger.debug(f"H between {img_id1} and {img_id2}:\n{H}")
+        # self.SI.update_homography(img_id1, img_id2, H)
+
+        # img_id1, img_id2 = 2, 1  # hard coded pair got from img_connections_ranked
+        # matched_kp_ids = self.get_image_pair_matches(img_id1, img_id2)
+        # logger.debug(f"matched_kp_ids between {img_id1} and {img_id2}:\n{matched_kp_ids}")
+        # H = self.get_homogrphy(kps, matched_kp_ids)
+        # logger.debug(f"H between {img_id1} and {img_id2}:\n{H}")
+        # self.SI.update_homography(img_id1, img_id2, H)
+
+        for img_id1, img_ids in img_connections_ranked.items():
+            if self.SI.is_connected(img_id1):
+                for img_id2 in img_ids[0:self.M]:
+                    if not self.SI.is_connected(img_id1):
+                        matched_kp_ids = self.get_image_pair_matches(img_id2, img_id1)
+                        H = self.get_homogrphy(kps, matched_kp_ids)
+                        self.SI.update_homography(img_id2, img_id1, H)
+            else:
+                for img_id2 in img_ids[0:self.M]:
+                    if self.SI.is_connected(img_id2):
+                        matched_kp_ids = self.get_image_pair_matches(img_id1, img_id2)
+                        H = self.get_homogrphy(kps, matched_kp_ids)
+                        self.SI.update_homography(img_id1, img_id2, H)
+
+        self.SI.sticth_images()
+        self.SI.display()
+        self.SI.save()
+
+    def get_homogrphy(self, kps: tuple[cv2.KeyPoint], matched_kp_ids: list[tuple[int, int]]):
+        src = np.empty((len(matched_kp_ids),2), dtype=np.float32)  # coords of features from img_id1 
+        dst = np.empty((len(matched_kp_ids),2), dtype=np.float32)  # coords of features from img_id2
+
+        for i, id_pair in enumerate(matched_kp_ids):
+            kp_id1, kp_id2 = id_pair  # get ids of features 
+            kp1, kp2 = kps[kp_id1], kps[kp_id2]  # use ids of features to get their objs
+            src[i, 0] = kp1.pt[0]  # x coord
+            src[i, 1] = kp1.pt[1]  # y coord
+            dst[i, 0] = kp2.pt[0]  # x coord
+            dst[i, 1] = kp2.pt[1]  # y coord
+
+        H, _ = cv2.findHomography(src, dst, cv2.RANSAC, 5.0)
+        return H  # transfromion to go from target to reference  
 
 
 if __name__ == "__main__":
