@@ -1,5 +1,7 @@
 .venv
 src/image_stitching/datasets/example-data
+pseudo.txt
+output
 
 # Python package files
 *.egg-info/
