@@ -581,6 +581,32 @@ class Panorama():
 
         return H, mask   # transfromion to go from target to reference, and mask of whether matched_kp_ids agree to H 
 
+    def determine_connection(self, img_id1: int, img_id2: int, mask: np.ndarray) -> bool:
+        """
+        Checks to see if a pair of images should be connected by checking if enough
+        matched keypoints agree to the estimated homography. Images need to have at 
+        least <self.valid_connection_threshold>% matches that agree with the homography.
+
+        Args:
+            img_id1 (int): id of image
+            img_id2 (int): id of image
+            mask (np.ndarray): mask result of cv2.findHomography()
+
+        Returns:
+            bool: flag for wether 2 images are connected
+        """
+        n_kps1 = (self.matching_df["ImgId"] == img_id1).sum()  # total kps of img1  
+        n_kps2 = (self.matching_df["ImgId"] == img_id2).sum()  # total kps of img2
+        max_n_kps = max(n_kps1, n_kps2)
+        correct_matches = mask.sum()
+        threshold = self.valid_connection_threshold * max_n_kps
+        logger.debug(f"Total keypoints in {img_id1} and Img {img_id2}: {n_kps1} {n_kps2}")
+        logger.debug(f"Threshold number of matches between Img {img_id1} and Img {img_id2}: {threshold}")
+        logger.debug(f"Number of correct matches between Img {img_id1} and Img {img_id2}: {correct_matches}")
+        if correct_matches >= threshold:
+            return True
+
+        return False
 
 
 if __name__ == "__main__":
