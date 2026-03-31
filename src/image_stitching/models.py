@@ -218,6 +218,16 @@ class Panorama():
         self.M = min(min_n_imgs, 2)  # number of best matched images to use per image
         self.valid_connection_threshold = 0.25  # percentage of kps matched between images, to accept them to be connected
         self.SI: StitchedImage
+
+    def select_images(self, indices: set[int]):
+        """
+        Reduce self.image_files to a selected few of image determined by 
+
+        Args:
+            indices (set[int]): ids of images to keep (range from 0 to len(self.image_files))
+        """
+        self.image_files = [self.image_files[i] for i in indices]
+   
     def generate_panorama(self):
         kps = self.detect()
         matches = self.match()
