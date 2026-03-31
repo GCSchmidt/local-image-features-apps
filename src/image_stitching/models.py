@@ -427,10 +427,6 @@ class Panorama():
             )
         return img_connections_ranked
 
-    def determine_connections(self, img_id1: int, img_id2: int, kps: tuple[cv2.KeyPoint]):
-        
-        return H 
-
     def get_image_pair_matches(self, img_id1: int, img_id2: int) -> list[tuple[int, int]]:
         """
         Generates list of keypoint id pairs, from 2 image IDs. The result
