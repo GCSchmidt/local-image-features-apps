@@ -101,7 +101,74 @@ class StitchedImage():
         self.connected.add(img_id1)
         logger.debug(f"Img {img_id1} connected via {img_id2}\nconnected set: {self.connected}")
 
-    def sticth_images(self):
+    def stitch_images(self):
+        # Load all images
+        imgs = [cv2.imread(p) for p in self.img_paths]
+        base = imgs[0]
+
+        # Homographies (all should be image -> base frame)
+        Hs = [np.eye(3)] + list(self.homographies[1:])
+
+        # Compute canvas size in original coordinates
+        all_corners = []
+        for img, H in zip(imgs, Hs):
+            h, w = img.shape[:2]
+            corners = np.array([[0,0], [w,0], [w,h], [0,h]], dtype=np.float32)
+            warped = cv2.perspectiveTransform(corners.reshape(-1,1,2), H)
+            all_corners.append(warped.reshape(-1,2))
+        all_corners = np.vstack(all_corners)
+
+        x_min, y_min = np.floor(all_corners.min(axis=0)).astype(int)
+        x_max, y_max = np.ceil(all_corners.max(axis=0)).astype(int)
+
+        canvas_w, canvas_h = x_max - x_min, y_max - y_min
+
+        # Scale factor
+        MAX_DIM = 3000
+        scale = min(1.0, MAX_DIM / max(canvas_w, canvas_h))
+
+        # Scale images
+        scaled_imgs = [cv2.resize(img, None, fx=scale, fy=scale) for img in imgs]
+
+        # Correct homography scaling:  H_scaled = S * H * S⁻¹
+        S = np.array([[scale, 0, 0],
+                    [0, scale, 0],
+                    [0, 0, 1]], dtype=np.float32)
+        S_inv = np.linalg.inv(S)
+
+        scaled_Hs = [S @ H @ S_inv for H in Hs]
+
+        # Compute new canvas translation
+        all_corners_scaled = []
+        for img, H in zip(scaled_imgs, scaled_Hs):
+            h, w = img.shape[:2]
+            corners = np.array([[0,0], [w,0], [w,h], [0,h]], dtype=np.float32)
+            warped = cv2.perspectiveTransform(corners.reshape(-1,1,2), H)
+            all_corners_scaled.append(warped.reshape(-1,2))
+        all_corners_scaled = np.vstack(all_corners_scaled)
+
+        x_min, y_min = np.floor(all_corners_scaled.min(axis=0)).astype(int)
+        x_max, y_max = np.ceil(all_corners_scaled.max(axis=0)).astype(int)
+
+        tx, ty = -x_min, -y_min
+        T = np.array([[1, 0, tx],
+                    [0, 1, ty],
+                    [0, 0, 1]], dtype=np.float32)
+
+        # Create final canvas
+        self.final_img = np.zeros((y_max - y_min, x_max - x_min, 3), dtype=np.uint8)
+
+        # Warp each image
+        for img, H in zip(scaled_imgs, scaled_Hs):
+            Ht = T @ H
+            cv2.warpPerspective(
+                img, Ht,
+                (self.final_img.shape[1], self.final_img.shape[0]),
+                self.final_img,
+                borderMode=cv2.BORDER_TRANSPARENT
+            )
+            
+    def stitch_images2(self):
         def corners(img, H):
             h, w = img.shape[:2]
             pts = np.array([[0,0], [w,0], [w,h], [0,h]], np.float32).reshape(-1,1,2)
