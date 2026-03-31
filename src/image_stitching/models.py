@@ -213,10 +213,11 @@ class Panorama():
         self.image_files = file_utils.get_image_files(path)
         self.matching_df: pd.DataFrame
         self.img_id_bounds: np.ndarray
-        self.K = 5  # find K-nearest neighbours during matching
-        self.M = 1  # number of best matched images to use per image
-        self.SI = StitchedImage(self.image_files)
-
+        self.K = 8  # find K-nearest neighbours during matching
+        min_n_imgs = max(1, len(self.image_files)-1)
+        self.M = min(min_n_imgs, 2)  # number of best matched images to use per image
+        self.valid_connection_threshold = 0.25  # percentage of kps matched between images, to accept them to be connected
+        self.SI: StitchedImage
     def generate_panorama(self):
         kps = self.detect()
         matches = self.match()
