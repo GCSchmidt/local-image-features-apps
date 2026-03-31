@@ -1,15 +1,16 @@
 import os
 import re
+import random as rdm
 
 LOG_PATH = r'/home/schmidtg/coding_projetcs/local-image-features-apps/logs/'
 OUTPUT_PATH = r'/home/schmidtg/coding_projetcs/local-image-features-apps/output/'
 
 
 def get_image_files(path: str) -> list:
-    """Returns a list of image files inside path."""
+    """Returns a list image file pasths inside a dir."""
 
     image_types = [".jpg", ".png", ".jpeg"]
-    image_files = [""]*(len(os.listdir(path))+1)
+    image_files = []
 
     for entry in os.scandir(path):
 
@@ -20,14 +21,8 @@ def get_image_files(path: str) -> list:
         if extension.lower() not in image_types:
             continue
 
-        result = re.search(r'\d+$', filename)
-        if not result:
-            continue
-
-        index = int(result.group())
-
-        image_files[index] = filename + extension
-
-    image_files = list(filter(lambda item: item != "", image_files))
+        image_files.append(filename + extension)
 
     return image_files
+
+
