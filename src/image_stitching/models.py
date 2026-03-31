@@ -202,7 +202,7 @@ class StitchedImage():
         cv2.destroyAllWindows()
         
     def save(self):
-        output_path = os.path.join(file_utils.OUTPUT_PATH, r"stitched.jpg")
+        output_path = os.path.join(file_utils.OUTPUT_PATH, r"panorama.jpg")
         success = cv2.imwrite(output_path, self.final_img)
 
 
