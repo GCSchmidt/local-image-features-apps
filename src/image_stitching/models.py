@@ -420,6 +420,7 @@ class Panorama():
     
     def rank_image_connections(self) -> dict[int, list[int]]:
         temp_df = self.get_number_of_matches_per_image_pair()
+        logger.debug(f"Matches Per Image Pair:\n {temp_df.to_string()}")
         img_connections_ranked = (
             temp_df.sort_values(['ImgId', 'Count'], 
                                 ascending=[True, False]).groupby('ImgId')['MatchedWith'].apply(list).to_dict()
