@@ -552,7 +552,20 @@ class Panorama():
         self.SI.display()
         self.SI.save()
 
-    def get_homogrphy(self, kps: tuple[cv2.KeyPoint], matched_kp_ids: list[tuple[int, int]]):
+    def get_homogrphy(self, kps: tuple[cv2.KeyPoint], matched_kp_ids: list[tuple[int, int]]) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Get the homography describing the transformation of keypoints in
+        one image to their matches counterparts in another image
+
+        Args:
+            kps (tuple[cv2.KeyPoint]): tuple of all detected KeyPoints across all the images 
+            matched_kp_ids (list[tuple[int, int]]): list of matched keypoints 
+
+        Returns:
+            tuple: a tuple containing:
+                - H (np.ndarray)
+                - mask (np.ndarray)
+        """
         src = np.empty((len(matched_kp_ids),2), dtype=np.float32)  # coords of features from img_id1 
         dst = np.empty((len(matched_kp_ids),2), dtype=np.float32)  # coords of features from img_id2
 
