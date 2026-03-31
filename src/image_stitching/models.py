@@ -229,6 +229,7 @@ class Panorama():
         self.image_files = [self.image_files[i] for i in indices]
    
     def generate_panorama(self):
+        self.SI = StitchedImage(self.image_files)
         kps = self.detect()
         _ = self.match_all_images()
         img_connections_ranked = self.rank_image_connections()
