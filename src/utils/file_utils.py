@@ -26,3 +26,16 @@ def get_image_files(path: str) -> list:
     return image_files
 
 
+def rename_files_sequential(folder_path):
+    # List all files (ignore directories)
+    files = [f for f in os.listdir(folder_path) if os.path.isfile(os.path.join(folder_path, f))]
+    # Sort files alphabetically (optional)
+    base = int(rdm.random()*1_000_000)
+    files.sort()
+    for i, filename in enumerate(files, start=1):
+        # Get file extension
+        ext = os.path.splitext(filename)[1]
+        new_name = f"{base+i}_{i}.{ext}"
+        old_path = os.path.join(folder_path, filename)
+        new_path = os.path.join(folder_path, new_name)
+        os.rename(old_path, new_path)
