@@ -83,17 +83,19 @@ class StitchedImage():
         Use the transformation from img_id1 to img_id2, 
         to update the transform from base to img_id2
         Args:
-            img_id1 (int): reference 
-            img_id2 (int): target image
-            H1_2 (np.ndarray): _description_
+            img_id1 (int): reference (image to connect)
+            img_id2 (int): target image (image connected already connected)
+            H1_2 (np.ndarray): homography from reference to target
         """
         if not self.is_connected(img_id2):
-            logger.debug(f"Failed to update homography of {img_id1} with the homography of {img_id2}." +
+            logger.debug(f"Failed to update homography of Img {img_id1} with the homography of Img {img_id2}." +
                          f"Img {img_id2} not yet added to connected: {self.connected}")
             return
-        H2 = self.homographies[img_id2] # TF from img ID 2 to base  
-        new_H = H2 @ H1_2
-        self.homographies[img_id1] = new_H
+        logger.debug(f"Homography from Img {img_id1} to Img {img_id2}:\n{H1_2}")
+
+        H2_0 = self.homographies[img_id2]  # TF from img ID 2 to base  
+        H1_0 = H2_0 @ H1_2 # TF from img ID 1 to base  
+        self.homographies[img_id1] = H1_0
         h_list = [str(x) for x in self.homographies]
         logger.debug("\n".join(h_list))
         self.connected.add(img_id1)
