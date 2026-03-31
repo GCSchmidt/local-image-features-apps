@@ -304,6 +304,48 @@ class Panorama():
         self.matching_df[["Matched_Ids", "Matched_ImgIds"]] = self.matching_df.apply(self.remove_invalid_matches, axis=1, args=(matches_list,))
         return matches_list
 
+    def match_two_images(self, img_id1: int, img_id2: int) -> list[tuple[int, int]]:
+        """
+        Generate a list keypoint id pairs identifying which keypoints from the 2 images are matched.
+
+        Args:
+            img_id1 (int): id of reference image
+            img_id2 (int): id of traget image
+
+        Returns:
+            list[tuple[int, int]]: pairs of matched keypoints, represented by their ids/indices.
+        """
+
+        # Define FLANN parameters and match descriptors
+        # from https://docs.opencv.org/4.x/dc/dc3/tutorial_py_matcher.html
+        FLANN_INDEX_LSH = 6
+        index_params = dict(algorithm=FLANN_INDEX_LSH,
+                            table_number=6,  # 12
+                            key_size=12,     # 20
+                            multi_probe_level=1)  # 2
+        search_params = dict(checks=50)   # or pass empty dictionary
+        flann = cv2.FlannBasedMatcher(index_params, search_params)
+
+        # get descriptors of kps 
+        des_list = self.matching_df[(self.matching_df["ImgId"] == img_id1)]["Descriptor"]
+        des1 = np.stack(des_list)
+        des_list = self.matching_df[(self.matching_df["ImgId"] == img_id2)]["Descriptor"]
+        des2 = np.stack(des_list)
+        # match
+        matches = flann.knnMatch(des1, des2, k=3)
+        # create kp id pairs
+        matched_id_pairs = []
+        for m_tuple in matches:
+            # N matches / tuples
+            kp_id1 = self.img_id_bounds[img_id1] + m_tuple[0].queryIdx # kp id in img1
+            for match in m_tuple:
+                # match is cv2.DMatch obj
+                kp_id2 = self.img_id_bounds[img_id2] + match.trainIdx # kp id in img2
+                kp_id_pair = (kp_id1, kp_id2)
+                matched_id_pairs.append(kp_id_pair)
+
+        return matched_id_pairs
+
     def add_matched_imgids_col(self) -> None:
         """
         Adds Matched_ImgIds column to self.matching_df.
