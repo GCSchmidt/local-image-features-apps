@@ -577,8 +577,10 @@ class Panorama():
             dst[i, 0] = kp2.pt[0]  # x coord
             dst[i, 1] = kp2.pt[1]  # y coord
 
-        H, _ = cv2.findHomography(src, dst, cv2.RANSAC, 5.0)
-        return H  # transfromion to go from target to reference  
+        H, mask = cv2.findHomography(src, dst, cv2.RANSAC, 5.0)
+
+        return H, mask   # transfromion to go from target to reference, and mask of whether matched_kp_ids agree to H 
+
 
 
 if __name__ == "__main__":
