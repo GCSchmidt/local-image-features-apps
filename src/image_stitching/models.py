@@ -230,7 +230,7 @@ class Panorama():
    
     def generate_panorama(self):
         kps = self.detect()
-        matches = self.match()
+        _ = self.match_all_images()
         img_connections_ranked = self.rank_image_connections()
         formatted_data = "\n".join([f"{k}:{v}" for k, v in img_connections_ranked.items()])
         logger.debug(f"img_connections_ranked:\n{formatted_data}")
