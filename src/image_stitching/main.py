@@ -2,7 +2,7 @@ import argparse
 import cv2
 import numpy as np
 import utils.file_utils as file_utils
-from image_stitching.models import Panorama, StitchedImage
+from image_stitching.models import Panorama, StitchedImage, CVPanorama
 
 
 def main(args):
@@ -27,6 +27,6 @@ def parse_arguments():
 
 
 if __name__ == "__main__":
-    print("Startring Sticthing App")
+    print("Starting Stitching App")
     args = parse_arguments()
     main(args)
