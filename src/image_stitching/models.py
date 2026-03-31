@@ -262,7 +262,7 @@ class Panorama():
         convert_dict = {'ImgId': np.uint8}
         self.matching_df = self.matching_df.astype(convert_dict)
 
-    def match(self) -> list[list[cv2.DMatch]]:
+    def match_all_images(self) -> list[list[cv2.DMatch]]:
         """
         Adds 'Matched_Ids' collumns to self.matching_df, which contains ids 
         of matched descriptors.
