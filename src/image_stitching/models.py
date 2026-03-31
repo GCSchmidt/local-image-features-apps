@@ -486,35 +486,69 @@ class Panorama():
         return matched_pairs
 
     def stitch(self, img_connections_ranked: dict, kps: tuple[cv2.KeyPoint]) -> None:
-        # img_id1, img_id2 = 1, 0  # hard coded pair got from img_connections_ranked
-        # matched_kp_ids = self.get_image_pair_matches(img_id1, img_id2)
-        # logger.debug(f"matched_kp_ids between {img_id1} and {img_id2}:\n{matched_kp_ids}")
-        # H = self.get_homogrphy(kps, matched_kp_ids)
-        # logger.debug(f"H between {img_id1} and {img_id2}:\n{H}")
-        # self.SI.update_homography(img_id1, img_id2, H)
+        """_summary_
 
-        # img_id1, img_id2 = 2, 1  # hard coded pair got from img_connections_ranked
-        # matched_kp_ids = self.get_image_pair_matches(img_id1, img_id2)
-        # logger.debug(f"matched_kp_ids between {img_id1} and {img_id2}:\n{matched_kp_ids}")
-        # H = self.get_homogrphy(kps, matched_kp_ids)
-        # logger.debug(f"H between {img_id1} and {img_id2}:\n{H}")
-        # self.SI.update_homography(img_id1, img_id2, H)
-
+        Args:
+            img_connections_ranked (dict): _description_
+            kps (tuple[cv2.KeyPoint]): _description_
+        """
         for img_id1, img_ids in img_connections_ranked.items():
             if self.SI.is_connected(img_id1):
+                # if we have a valid homography for this image, we can use it
+                # to find the homographies of the images connected to it. 
                 for img_id2 in img_ids[0:self.M]:
-                    if not self.SI.is_connected(img_id1):
-                        matched_kp_ids = self.get_image_pair_matches(img_id2, img_id1)
-                        H = self.get_homogrphy(kps, matched_kp_ids)
-                        self.SI.update_homography(img_id2, img_id1, H)
-            else:
-                for img_id2 in img_ids[0:self.M]:
-                    if self.SI.is_connected(img_id2):
-                        matched_kp_ids = self.get_image_pair_matches(img_id1, img_id2)
-                        H = self.get_homogrphy(kps, matched_kp_ids)
-                        self.SI.update_homography(img_id1, img_id2, H)
+                    
+                    # go through top self.M best connected images
+                    if not self.SI.is_connected(img_id2):
 
-        self.SI.sticth_images()
+                        logger.debug(f"Trying to connect Img {img_id2} via Img {img_id1}")
+
+                        # only need to determine homography if the image is 
+                        # not yet connected/had its homography calculated previously
+                        
+                        # get matched pairs of keypoints with
+
+                        # option 1: might miss some keypint matches because limited to prevoius matching method
+                        # matched_kp_ids = self.get_image_pair_matches(img_id2, img_id1)
+                        
+                        # option 2: redos matching, to get more possible matches
+                        matched_kp_ids = self.match_two_images(img_id2, img_id1)
+                        
+                        H, mask = self.get_homogrphy(kps, matched_kp_ids)
+
+                        connected_flag = self.determine_connection(img_id2, img_id1, mask)
+                        if connected_flag:
+                            logger.debug(f"{img_id1} and Img {img_id2} are connected")
+                            self.SI.update_homography(img_id2, img_id1, H)
+                        else:
+                            logger.debug(f"{img_id1} and Img {img_id2} are not connected")
+            else:
+                # if we dont have a valid homography for this image, we can use the
+                # the homography of an image connected to it. 
+                for img_id2 in img_ids[0:self.M]:
+                    
+                    # go through top self.M best connected images
+                    if self.SI.is_connected(img_id2):
+
+                        logger.debug(f"Trying to connect Img {img_id1} via Img {img_id2}")
+
+                        # need an image for which we already have a homography
+
+                        # option 1: might miss some keypint matches because limited to prevoius matching method
+                        # matched_kp_ids = self.get_image_pair_matches(img_id1, img_id2)
+
+                        # option 2: redos matching, to get more possible matches
+                        matched_kp_ids = self.match_two_images(img_id1, img_id2)
+
+                        H, mask = self.get_homogrphy(kps, matched_kp_ids)
+                        connected_flag = self.determine_connection(img_id1, img_id2, mask)
+                        if connected_flag:
+                            logger.debug(f"Img {img_id1} and Img {img_id2} are connected")
+                            self.SI.update_homography(img_id1, img_id2, H)
+                        else:
+                            logger.debug(f"Img {img_id1} and Img {img_id2} are not connected")
+
+        self.SI.stitch_images()
         self.SI.display()
         self.SI.save()
 
