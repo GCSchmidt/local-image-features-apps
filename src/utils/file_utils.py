@@ -26,6 +26,17 @@ def get_image_files(path: str) -> list:
     return image_files
 
 
+def get_folders(path: str) -> list:
+    """Returns a list of folder paths inside a directory (non-recursive)."""
+
+    folders = []
+
+    for entry in os.scandir(path):
+        if entry.is_dir():
+            folders.append(entry.path)
+
+    return folders
+
 def rename_files_sequential(folder_path):
     # List all files (ignore directories)
     files = [f for f in os.listdir(folder_path) if os.path.isfile(os.path.join(folder_path, f))]
@@ -39,3 +50,5 @@ def rename_files_sequential(folder_path):
         old_path = os.path.join(folder_path, filename)
         new_path = os.path.join(folder_path, new_name)
         os.rename(old_path, new_path)
+
+    
