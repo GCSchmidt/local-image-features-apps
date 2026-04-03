@@ -29,8 +29,8 @@ def plot_connectivity_matrix(match_ratio: np.ndarray):
             display_value = f"{int(match_ratio[i, j]*100)}%"
             ax.text(j, i, display_value, ha="center", va="center")
 
-    plt.xlabel("Reference Image")
-    plt.ylabel("Target Image")
+    plt.xlabel("Target Image")
+    plt.ylabel("Reference Image")
     plt.title("Match Percentage")
 
     plt.tight_layout()
