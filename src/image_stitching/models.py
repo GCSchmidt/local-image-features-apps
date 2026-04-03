@@ -3,10 +3,13 @@ import os
 import pandas as pd
 import cv2
 import numpy as np
+import networkx as nx
+from enum import Enum
 from itertools import compress
 from pathlib import Path
 from dataclasses import dataclass
 from utils import file_utils
+
 
 
 MIN_MATCH_COUNT = 10
@@ -31,6 +34,25 @@ file_handler.setFormatter(formatter)
 # Add the handler if not already added (to avoid duplicates)
 if not logger.handlers:
     logger.addHandler(file_handler)
+
+
+class ValidConnection(Enum):
+    """
+    Indicates whether a connection between a pair of images has been verified with inliers of the homography.
+    """
+    UNKNOWN = -1
+    NOTCONNECTED = 0
+    CONNECTED = 1
+
+
+@dataclass
+class ImageConnection:
+    weight: float  # 1 - percentage of matches 
+    inliers: int  # number of inliers
+    valid_connection: ValidConnection
+    homography: np.ndarray  # homography describing transfrom from image with lower index to higher
+    reference: int  # id of base image
+    target: int  # id of target image
 
 
 class StitchedImage():
@@ -206,6 +228,102 @@ class StitchedImage():
         success = cv2.imwrite(output_path, self.final_img)
 
 
+class PanoramaGraph():
+
+    def __init__(self, match_threshold) -> None:
+        self.graph = nx.Graph()
+        self.match_threshold = match_threshold  # ration of matches needed to be possible connection       
+        self.fully_connected = False
+        self.base_node = 0
+
+    def initialize_graph(self, match_ratio: np.ndarray):
+        """_summary_
+
+        Args:
+            match_ratio (np.ndarray): matrix specifying ratio of matches between images pairs
+            threshold (float): ratio needed for a possible connection / edge 
+        """
+        n_images = match_ratio.shape[0]
+        for i in range(n_images):
+            for j in range(i+1, n_images):
+                best_ratio = max(match_ratio[i, j], match_ratio[j, i]) 
+                if best_ratio > self.match_threshold:
+                    inverse_ratio = 1 - best_ratio
+                    ic = ImageConnection(
+                        weight=inverse_ratio,
+                        inliers=0,
+                        valid_connection=ValidConnection.UNKNOWN,
+                        homography=np.identity(3),
+                        reference=i,
+                        target=j
+                        )
+                    self.graph.add_edge(i, j, weight=inverse_ratio, data=ic)
+
+        self.set_fully_connected()
+        self.get_base_node()
+
+    def set_fully_connected(self):
+        self.fully_connected = nx.is_connected(self.graph)
+
+    def get_base_node(self):
+        closeness = nx.closeness_centrality(self.graph)
+        self.base_node = max(closeness, key=closeness.get)
+
+    def get_k_closest_neighbors(self, node, k=3):
+        neighbors = self.graph[node]  # adjacency dict
+        sorted_neighbors = sorted(
+            neighbors.items(),
+            key=lambda x: x[1]['weight']  # sort by weight
+        )
+        return [n for n, _ in sorted_neighbors[:k]]
+    
+    def remove_invalid_edges(self) -> None:
+        """
+        Remove all edges that are not ValidConnection.CONNECTED
+        """
+        edges_to_remove = []
+
+        for u, v, attr in self.graph.edges(data=True):
+            ic = attr.get("data", None)
+
+            if ic is None or ic.valid_connection != ValidConnection.CONNECTED:
+                edges_to_remove.append((u, v))
+
+        self.graph.remove_edges_from(edges_to_remove)
+
+    def get_minimum_spanning_tree(self):
+        self.graph = nx.minimum_spanning_tree(self.graph)
+
+    def get_homography_from_to(self, target_id: int) -> np.ndarray:
+        """
+        Calculates the homogrpahy from base image to target image
+
+        Args:
+            target_id (int): id of target image
+
+        Returns:
+            np.ndarray: homography
+        """
+        
+        path = nx.shortest_path(self.graph, source=self.base_node, target=target_id)
+
+        H_total = np.eye(3)
+
+        for ref, target in zip(path[:-1], path[1:]):
+            ic = self.graph[ref][target]["data"]
+            H = ic.homography
+            H_ref = ic.reference
+            # Check direction
+            if ref != H_ref:
+                # reverse direction → invert homography
+                H = np.linalg.inv(H)
+
+            # Compose transformations
+            H_total = H @ H_total
+
+        return H_total
+
+
 class Panorama():
 
     def __init__(self, path) -> None:
@@ -213,15 +331,17 @@ class Panorama():
         self.image_files = file_utils.get_image_files(path)
         self.matching_df: pd.DataFrame
         self.img_id_bounds: np.ndarray
-        self.K = 8  # find K-nearest neighbours during matching
+        self.K = min(len(self.image_files), 5)  # find K-nearest neighbours for each feature
         min_n_imgs = max(1, len(self.image_files)-1)
-        self.M = min(min_n_imgs, 2)  # number of best matched images to use per image
-        self.valid_connection_threshold = 0.25  # percentage of kps matched between images, to accept them to be connected
+        self.M = min(min_n_imgs, 3)  # number of images to check for connection
+        self.connection_threshold = 0.25  # ration of matches between 2 images, needed to check for possible connection
+        self.inlier_threshold = 0.15  # inlier ratio needed to confirm a connection between images
         self.SI: StitchedImage
+        self.PG = PanoramaGraph(self.connection_threshold)
 
-    def select_images(self, indices: set[int]):
+    def select_images(self, indices: list[int]):
         """
-        Reduce self.image_files to a selected few of image determined by 
+        Reduce self.image_files to a selected few of image determined by indices
 
         Args:
             indices (set[int]): ids of images to keep (range from 0 to len(self.image_files))
@@ -229,13 +349,17 @@ class Panorama():
         self.image_files = [self.image_files[i] for i in indices]
    
     def generate_panorama(self):
-        self.SI = StitchedImage(self.image_files)
+        self.generate_graph()
+        self.stitch()
+
+    def generate_graph(self):
         kps = self.detect()
         _ = self.match_all_images()
-        img_connections_ranked = self.rank_image_connections()
-        formatted_data = "\n".join([f"{k}:{v}" for k, v in img_connections_ranked.items()])
-        logger.debug(f"img_connections_ranked:\n{formatted_data}")
-        self.stitch(img_connections_ranked, kps)
+        self.keep_top_n_matches(self.K)
+        match_ratios = self.match_ratio_matrix()
+        self.PG.initialize_graph(match_ratios)
+        self.establish_connections(kps)
+        self.PG.get_minimum_spanning_tree()
 
     def detect(self) -> tuple[cv2.KeyPoint]:
         """
@@ -289,22 +413,40 @@ class Panorama():
         search_params = dict(checks=50)   # or pass empty dictionary
         flann = cv2.FlannBasedMatcher(index_params, search_params)
         des = np.stack(list(self.matching_df["Descriptor"]))
-        matches = flann.knnMatch(des, des, k=self.K)
+        K = self.K * 2 # so that we are sure to have more matches after reduction 
+        matches = flann.knnMatch(des, des, k=K)
+        distance_col = list()  # distances of match column 
         # create a list version of matches
         # and create Matched_Ids col.
         matches_list, matched_col = list(), list()
+
         for i, m_tuple in enumerate(matches):
             m_list = list(m_tuple[1:])  # 1st match is always the feature matches with itself
             matches_list.append(m_list)
-            matched_col.append(np.array([m.trainIdx for m in m_list]))
+            train_idx = []
+            distances = []
+            for m in m_list:
+                train_idx.append(m.trainIdx)
+                distances.append(m.distance)
+            matched_col.append(np.array(train_idx))
+            distance_col.append(np.array(distances))
 
         self.matching_df['Matched_Ids'] = matched_col
+        self.matching_df['Distances'] = distance_col
         self.add_matched_imgids_col()
         # remove (invalid) matches from the same image, also modifies matches_list
         self.matching_df[["Matched_Ids", "Matched_ImgIds"]] = self.matching_df.apply(self.remove_invalid_matches, axis=1, args=(matches_list,))
         return matches_list
 
-    def match_two_images(self, img_id1: int, img_id2: int) -> list[tuple[int, int]]:
+    def keep_top_n_matches(self, n):
+        """
+        Reduce entries in "Matched_Ids", "Matched_ImgIds" and "Distances" columns of self.matching_df.
+        Reduces to length of n.
+        """
+        for col in ["Matched_Ids", "Matched_ImgIds", "Distances"]:
+            self.matching_df[col] = self.matching_df[col].map(lambda x: x[:n])
+
+    def match_two_images(self, img_id1: int, img_id2: int, K) -> list[tuple[int, int]]:
         """
         Generate a list keypoint id pairs identifying which keypoints from the 2 images are matched.
 
@@ -332,7 +474,7 @@ class Panorama():
         des_list = self.matching_df[(self.matching_df["ImgId"] == img_id2)]["Descriptor"]
         des2 = np.stack(des_list)
         # match
-        matches = flann.knnMatch(des1, des2, k=3)
+        matches = flann.knnMatch(des1, des2, k=K)
         # create kp id pairs
         matched_id_pairs = []
         for m_tuple in matches:
@@ -362,6 +504,15 @@ class Panorama():
             int: in range from 0 to length of bounds - 1
         """
         return np.searchsorted(self.img_id_bounds, id, side='right') - 1
+
+    def get_number_of_features_in_img(self, id) -> int:
+        """
+        Gets the total number of features in image with id.
+        Returns:
+            int: total features
+        """
+        total = self.img_id_bounds[id+1] - self.img_id_bounds[id] 
+        return total
 
     def matched_ids_to_img_ids(self, row) -> np.ndarray:
         """Generate the img ids from the row's matched keypoint ids
@@ -406,7 +557,7 @@ class Panorama():
         Returns:
             pd.DataFrame: collumns: ImgId (reference image id), 
             MatchedWith (target image id), 
-            Count (nnumber of matches)
+            Count (number of matches)
         """
         temp_df = self.matching_df.explode('Matched_ImgIds')
         result = (
@@ -417,6 +568,41 @@ class Panorama():
             .rename(columns={'Matched_ImgIds': 'MatchedWith'})
         )
         return result
+    
+    def match_count_matrix(self) -> np.ndarray:
+        """
+        Create a matrix indicating the total matches between images.
+        Reference image id is row id.
+        Target image id is column id.
+        Returns:
+            np.ndarray:
+        """
+        n_images = len(self.image_files)
+        matrix = np.zeros((n_images, n_images))
+
+        df = self.get_number_of_matches_per_image_pair()
+
+        matrix[
+            df["ImgId"].to_numpy(),
+            df["MatchedWith"].to_numpy()
+        ] = df["Count"].to_numpy()
+
+        return matrix
+        
+    def match_ratio_matrix(self) -> np.ndarray:
+        """
+        Create a matrix indicating the ratio between total matches between images.
+        Reference image id is row id.
+        Target image id is column id.
+        Returns:
+            np.ndarray:
+        """
+        n_images = len(self.image_files)
+        matrix = self.match_count_matrix()
+        for id in range(n_images):
+            n_ref_features = self.get_number_of_features_in_img(id)
+            matrix[id] = matrix[id] / n_ref_features
+        return matrix
     
     def rank_image_connections(self) -> dict[int, list[int]]:
         temp_df = self.get_number_of_matches_per_image_pair()
@@ -485,72 +671,11 @@ class Panorama():
         matched_pairs = [(kp_id_img1, int(kp_id_img2)) for kp_id_img2 in valid_id]
         return matched_pairs
 
-    def stitch(self, img_connections_ranked: dict, kps: tuple[cv2.KeyPoint]) -> None:
-        """_summary_
-
-        Args:
-            img_connections_ranked (dict): _description_
-            kps (tuple[cv2.KeyPoint]): _description_
+    def stitch(self) -> None:
         """
-        for img_id1, img_ids in img_connections_ranked.items():
-            if self.SI.is_connected(img_id1):
-                # if we have a valid homography for this image, we can use it
-                # to find the homographies of the images connected to it. 
-                for img_id2 in img_ids[0:self.M]:
-                    
-                    # go through top self.M best connected images
-                    if not self.SI.is_connected(img_id2):
+        """
+        pass
 
-                        logger.debug(f"Trying to connect Img {img_id2} via Img {img_id1}")
-
-                        # only need to determine homography if the image is 
-                        # not yet connected/had its homography calculated previously
-                        
-                        # get matched pairs of keypoints with
-
-                        # option 1: might miss some keypint matches because limited to prevoius matching method
-                        # matched_kp_ids = self.get_image_pair_matches(img_id2, img_id1)
-                        
-                        # option 2: redos matching, to get more possible matches
-                        matched_kp_ids = self.match_two_images(img_id2, img_id1)
-                        
-                        H, mask = self.get_homogrphy(kps, matched_kp_ids)
-
-                        connected_flag = self.determine_connection(img_id2, img_id1, mask)
-                        if connected_flag:
-                            logger.debug(f"{img_id1} and Img {img_id2} are connected")
-                            self.SI.update_homography(img_id2, img_id1, H)
-                        else:
-                            logger.debug(f"{img_id1} and Img {img_id2} are not connected")
-            else:
-                # if we dont have a valid homography for this image, we can use the
-                # the homography of an image connected to it. 
-                for img_id2 in img_ids[0:self.M]:
-                    
-                    # go through top self.M best connected images
-                    if self.SI.is_connected(img_id2):
-
-                        logger.debug(f"Trying to connect Img {img_id1} via Img {img_id2}")
-
-                        # need an image for which we already have a homography
-
-                        # option 1: might miss some keypint matches because limited to prevoius matching method
-                        # matched_kp_ids = self.get_image_pair_matches(img_id1, img_id2)
-
-                        # option 2: redos matching, to get more possible matches
-                        matched_kp_ids = self.match_two_images(img_id1, img_id2)
-
-                        H, mask = self.get_homogrphy(kps, matched_kp_ids)
-                        connected_flag = self.determine_connection(img_id1, img_id2, mask)
-                        if connected_flag:
-                            logger.debug(f"Img {img_id1} and Img {img_id2} are connected")
-                            self.SI.update_homography(img_id1, img_id2, H)
-                        else:
-                            logger.debug(f"Img {img_id1} and Img {img_id2} are not connected")
-
-        self.SI.stitch_images()
-        self.SI.display()
-        self.SI.save()
 
     def get_homogrphy(self, kps: tuple[cv2.KeyPoint], matched_kp_ids: list[tuple[int, int]]) -> tuple[np.ndarray, np.ndarray]:
         """
@@ -581,32 +706,74 @@ class Panorama():
 
         return H, mask   # transfromion to go from target to reference, and mask of whether matched_kp_ids agree to H 
 
-    def determine_connection(self, img_id1: int, img_id2: int, mask: np.ndarray) -> bool:
-        """
-        Checks to see if a pair of images should be connected by checking if enough
-        matched keypoints agree to the estimated homography. Images need to have at 
-        least <self.valid_connection_threshold>% matches that agree with the homography.
+    def establish_connections(self, kps):
+        n_images = len(self.image_files)
+        for ref_id in range(n_images):
+            target_ids = self.PG.get_k_closest_neighbors(ref_id, self.M)
+            for target_id in target_ids:
+                edge = self.PG.graph[ref_id][target_id]
+                current_ic = edge['data']
+                if current_ic.valid_connection is not ValidConnection.CONNECTED:
+                    new_ic = self.get_connection_between(ref_id, target_id, kps)
+                    if new_ic.valid_connection == ValidConnection.CONNECTED:
+                        self.PG.graph[ref_id][target_id]['data'] = new_ic
+                    elif new_ic.valid_connection == ValidConnection.NOTCONNECTED:
+                        self.PG.graph.remove_edge(ref_id, target_id)
+        # self.PG.remove_invalid_edges()
 
+    def get_inlier_ratio(self, img_id1, n_inliers: int) -> float:
+        """
+        Calculates the ratio of inlier matches from the estimated homography between 2 images.
         Args:
-            img_id1 (int): id of image
-            img_id2 (int): id of image
-            mask (np.ndarray): mask result of cv2.findHomography()
+            img_id1 (int): img id
+            n_inliers (int): number of inliers
 
         Returns:
-            bool: flag for wether 2 images are connected
+            float: inlier ratio 
         """
-        n_kps1 = (self.matching_df["ImgId"] == img_id1).sum()  # total kps of img1  
-        n_kps2 = (self.matching_df["ImgId"] == img_id2).sum()  # total kps of img2
-        max_n_kps = max(n_kps1, n_kps2)
-        correct_matches = mask.sum()
-        threshold = self.valid_connection_threshold * max_n_kps
-        logger.debug(f"Total keypoints in {img_id1} and Img {img_id2}: {n_kps1} {n_kps2}")
-        logger.debug(f"Threshold number of matches between Img {img_id1} and Img {img_id2}: {threshold}")
-        logger.debug(f"Number of correct matches between Img {img_id1} and Img {img_id2}: {correct_matches}")
-        if correct_matches >= threshold:
-            return True
+        n_features = self.get_number_of_features_in_img(img_id1)
+        inlier_percentage = n_inliers / n_features
+        return inlier_percentage
 
-        return False
+    def get_connection_between(self, img_id1, img_id2, kps) -> ImageConnection:
+        # case 1 img_id1 is reference
+        IC = self.get_connection_from_and_to(img_id1, img_id2, kps)
+        if IC.valid_connection == ValidConnection.CONNECTED:
+            return IC
+        
+        # case 2 img_id2 is reference
+        IC = self.get_connection_from_and_to(img_id1, img_id2, kps)
+        if IC.valid_connection == ValidConnection.CONNECTED:
+            return IC
+        
+        IC = ImageConnection(
+            weight=1,
+            inliers=0,
+            valid_connection=ValidConnection.NOTCONNECTED,
+            homography=np.identity(3),
+            reference=img_id1,
+            target=img_id2
+        )
+        return IC
+
+    def get_connection_from_and_to(self, img_id1, img_id2, kps) -> ImageConnection:
+        matched_ids = self.get_image_pair_matches(img_id1, img_id2)
+        H, mask = self.get_homogrphy(kps, matched_ids)
+        n_inliers = np.count_nonzero(mask)
+        inlier_ratio = self.get_inlier_ratio(img_id1, n_inliers)
+        if inlier_ratio > self.inlier_threshold:
+            valid_connection = ValidConnection.CONNECTED
+        else:
+            valid_connection = ValidConnection.NOTCONNECTED
+        IC = ImageConnection(
+            weight=1 - inlier_ratio,
+            inliers=n_inliers,
+            valid_connection=valid_connection,
+            homography=H,
+            reference=img_id1,
+            target=img_id2
+        )
+        return IC
 
 
 class CVPanorama():
