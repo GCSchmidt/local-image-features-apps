@@ -43,6 +43,13 @@ class ValidConnection(Enum):
     CONNECTED = 1
 
 
+class HomographyReference(Enum):
+    """
+    Wether homography should map from/to the base image 
+    """
+    TOBASE = 0
+    FROMBASE = 1
+
 @dataclass
 class ImageConnection:
     weight: float  # 1 - percentage of matches 
