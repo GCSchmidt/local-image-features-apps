@@ -621,6 +621,30 @@ class Panorama():
         )
         return result
     
+    def get_number_of_good_matches_per_image_pair(self) -> pd.DataFrame:
+        """
+        Generate a dataframe specifying the amount of good matches between all image pairs.
+        A good macth is where the 1st macths has a distance 0.8 smaller than the 2nd best. 
+        Returns:
+            pd.DataFrame: collumns: ImgId (reference image id), 
+            MatchedWith (target image id), 
+            Count (number of matches)
+        """
+        temp_df = self.matching_df[
+            self.matching_df['Distances'].apply(
+                lambda d: len(d) >= 2 and d[0] < 0.8 * d[1]
+            )
+        ]
+        temp_df = temp_df.explode('Matched_ImgIds')
+        result = (
+            temp_df
+            .groupby(['ImgId', 'Matched_ImgIds'])
+            .size()
+            .reset_index(name='Count')
+            .rename(columns={'Matched_ImgIds': 'MatchedWith'})
+        )
+        return result
+    
     def match_count_matrix(self) -> np.ndarray:
         """
         Create a matrix indicating the total matches between images.
