@@ -6,10 +6,8 @@ import numpy as np
 import networkx as nx
 from enum import Enum
 from itertools import compress
-from pathlib import Path
 from dataclasses import dataclass
 from utils import file_utils
-
 
 
 MIN_MATCH_COUNT = 10
