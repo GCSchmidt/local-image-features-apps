@@ -599,10 +599,6 @@ class Panorama():
         matches_list[index] = list(compress(matches_list[index], mask))
         return pd.Series([matched_ids, img_ids])
 
-    def match_stats(self):
-        # Get the counts of imag matches
-        print(self.get_number_of_matches_per_image_pair())
-
     def get_number_of_matches_per_image_pair(self) -> pd.DataFrame:
         """
         Generate a dataframe specifying the amount of matches between all image pairs.
