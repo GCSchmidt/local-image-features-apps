@@ -392,7 +392,15 @@ class Panorama():
             indices (set[int]): ids of images to keep (range from 0 to len(self.image_files))
         """
         self.image_files = [self.image_files[i] for i in indices]
-   
+
+    def get_image_names(self) -> list[str]:
+        out = [os.path.basename(path) for path in self.image_files] 
+        return out
+
+    def get_file_name(self, id) -> str:
+        out = os.path.basename(self.image_files[id])
+        return out
+
     def generate_panorama(self):
         self.generate_graph()
         self.stitch()
