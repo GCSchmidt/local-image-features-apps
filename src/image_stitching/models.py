@@ -867,6 +867,21 @@ class Panorama():
         )
         return IC
 
+    def get_image_sequence_from_graph(self) -> list[str]:
+        """_summary_
+
+        Returns:
+            list[str]: _description_
+        """
+        # check if self.PG has nodes/edges
+
+        if not self.PG.graph.has_node(0):
+            raise Exception("Need to generate the graph first")
+
+        nodes = list(nx.dfs_preorder_nodes(self.PG.graph))
+        images = [os.path.basename(self.image_files[node]) for node in nodes]
+
+        return images
 
 class CVPanorama():
 
