@@ -643,7 +643,7 @@ class Panorama():
     
     def match_count_matrix(self) -> np.ndarray:
         """
-        Create a matrix indicating the total matches between images.
+        Create a matrix indicating the total good matches between images.
         Reference image id is row id.
         Target image id is column id.
         Returns:
@@ -652,7 +652,7 @@ class Panorama():
         n_images = len(self.image_files)
         matrix = np.zeros((n_images, n_images))
 
-        df = self.get_number_of_matches_per_image_pair()
+        df = self.get_number_of_good_matches_per_image_pair()
 
         matrix[
             df["ImgId"].to_numpy(),
@@ -663,7 +663,7 @@ class Panorama():
         
     def match_ratio_matrix(self) -> np.ndarray:
         """
-        Create a matrix indicating the ratio between total matches between images.
+        Create a matrix indicating the ratio between total good matches between images.
         Reference image id is row id.
         Target image id is column id.
         Returns:
