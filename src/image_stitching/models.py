@@ -408,7 +408,6 @@ class Panorama():
     def generate_graph(self):
         kps = self.detect()
         _ = self.match_all_images()
-        self.keep_top_n_matches(self.K)
         match_ratios = self.match_ratio_matrix()
         self.PG.initialize_graph(match_ratios)
         self.establish_connections(kps)
