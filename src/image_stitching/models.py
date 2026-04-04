@@ -689,6 +689,26 @@ class Panorama():
             )
         return img_connections_ranked
 
+    def print_matching_stats(self):
+        """
+        Prints the the number of matches (counts and ratio) between images
+        """
+        rankings = self.rank_image_connections()
+        M_count = self.match_count_matrix()
+        M_ratio = self.match_ratio_matrix()
+
+        for id, arr in rankings.items():
+            name = self.get_file_name(id)
+            lines = []
+            for match_id in arr:
+                count = M_count[id][match_id]
+                ratio = M_ratio[id][match_id]
+                line = f"{match_id} | {self.get_file_name(match_id)} | {count} | {ratio}"
+                lines.append(line)
+            ranking_str = "\n\t".join(lines)
+            print(f"{id} | {name}")
+            print(f"\t{ranking_str}\n")
+
     def get_image_pair_matches(self, img_id1: int, img_id2: int) -> list[tuple[int, int]]:
         """
         Generates list of keypoint id pairs, from 2 image IDs. The result
