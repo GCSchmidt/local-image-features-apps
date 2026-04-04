@@ -1,13 +1,19 @@
+from enum import Enum
 import numpy as np
 import networkx as nx
 import matplotlib.pyplot as plt
 from image_stitching import models
 
 
-def plot_connectivity_matrix(match_ratio: np.ndarray):
-    n_images = match_ratio.shape[0]
-    fig, ax = plt.subplots()
-    cax = ax.imshow(match_ratio)
+class ConnectivityMatrixMode(Enum):
+    RATIO = 0
+    COUNT = 1
+
+
+def plot_connectivity_matrix(matrix: np.ndarray, mode=ConnectivityMatrixMode.RATIO):
+    n_images = matrix.shape[0]
+    fig, ax = plt.subplots(figsize=(10, 8))  # width, height in inches
+    cax = ax.imshow(matrix)
 
     # Add colorbar
     plt.colorbar(cax)
@@ -26,12 +32,22 @@ def plot_connectivity_matrix(match_ratio: np.ndarray):
     # Annotate each cell with value
     for i in range(n_images):
         for j in range(n_images):
-            display_value = f"{int(match_ratio[i, j]*100)}%"
+            display_value = ""
+            if mode == ConnectivityMatrixMode.RATIO:
+                display_value = f"{matrix[i, j]:.2f}"
+            else:
+                display_value = f"{int(matrix[i, j])}"
             ax.text(j, i, display_value, ha="center", va="center")
 
     plt.xlabel("Target Image")
     plt.ylabel("Reference Image")
-    plt.title("Match Percentage")
+
+    if mode == ConnectivityMatrixMode.RATIO:
+        title = "Match Percentage"
+    else:
+        title = "Match Count"
+
+    plt.title(title)
 
     plt.tight_layout()
     plt.show()
