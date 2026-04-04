@@ -294,6 +294,36 @@ class PanoramaGraph():
     def get_minimum_spanning_tree(self):
         self.graph = nx.minimum_spanning_tree(self.graph)
 
+    def get_homographies_from_base(self) -> dict[int, np.ndarray]:
+        """
+        Calculate all homographies with the base image as reference.
+        Homographies are composed using BFS (shortest path).
+        """
+        from collections import deque
+
+        homographies: dict[int, np.ndarray] = {self.base_node: np.eye(3)}
+        queue = deque([self.base_node])
+
+        while queue:
+            current = queue.popleft()
+            current_H = homographies[current]
+
+            for neighbor in self.graph[current]:
+                if neighbor not in homographies:
+                    ic = self.graph[current][neighbor]["data"]
+                    H = ic.homography
+
+                    if ic.reference == current:
+                        edge_H = H
+                    else:
+                        edge_H = np.linalg.inv(H)
+
+                    homographies[neighbor] = current_H @ edge_H
+                    queue.append(neighbor)
+
+        return homographies
+
+
     def get_homography_from_to(self, target_id: int) -> np.ndarray:
         """
         Calculates the homogrpahy from base image to target image
