@@ -334,12 +334,13 @@ class PanoramaGraph():
         return homographies
 
 
-    def get_homography_from_to(self, target_id: int) -> np.ndarray:
+    def get_homography_from_to(self, target_id: int, reference: HomographyReference = HomographyReference.TOBASE) -> np.ndarray:
         """
-        Calculates the homogrpahy from base image to target image
+        Calculates the homogrpahy to/from base image from/to target image
 
         Args:
             target_id (int): id of target image
+            reference (HomographyReference): TOBASE or FROMBASE
 
         Returns:
             np.ndarray: homography
@@ -354,12 +355,16 @@ class PanoramaGraph():
             H = ic.homography
             H_ref = ic.reference
             # Check direction
-            if ref != H_ref:
+            if ref == H_ref:
+                # default want target to base
                 # reverse direction → invert homography
                 H = np.linalg.inv(H)
 
             # Compose transformations
             H_total = H @ H_total
+
+        if reference == HomographyReference.FROMBASE:
+            H_total = np.linalg.inv(H_total)
 
         return H_total
 
