@@ -2,19 +2,21 @@ import cv2
 import numpy as np
 from typing import TypeAlias
 
-from core.types import KnnMatches, MatchGroup, KnnMatchesList, MatchList, ORBDescriptor
+from core.types import KnnMatches, KnnMatchesList, ORBDescriptors
 from classes.ORBImage import ORBImage 
 
 # Types
 ORBImageList: TypeAlias = list[ORBImage]
 
+
 def match_orb_images(orb_images: ORBImageList, k: int):
     descriptors = combine_descriptors(orb_images)
     matches = get_matches(descriptors, k)
-    return matches
+    processed_matches = process_matches(orb_images, matches)
+    return processed_matches
 
 
-def combine_descriptors(orb_images: ORBImageList):
+def combine_descriptors(orb_images: ORBImageList) -> ORBDescriptors:
     combined_list = []
 
     for orb_image in orb_images:
@@ -29,7 +31,7 @@ def combine_descriptors(orb_images: ORBImageList):
     return np.vstack(combined_list)
 
 
-def get_matches(descriptors: np.ndarray, k: int):
+def get_matches(descriptors: np.ndarray, k: int) -> KnnMatches:
     # Define FLANN parameters and match descriptors
     # from https://docs.opencv.org/4.x/dc/dc3/tutorial_py_matcher.html
     FLANN_INDEX_LSH = 6
@@ -44,15 +46,17 @@ def get_matches(descriptors: np.ndarray, k: int):
     return matches
 
 
-def process_matches(orb_images: ORBImageList, matches: KnnMatches):
+def process_matches(orb_images: ORBImageList, matches: KnnMatches) -> KnnMatchesList:
     kps_ranges = get_kps_ranges(orb_images)
+    processed_matches = remove_all_invalid_matches(matches, kps_ranges)
+    return processed_matches
 
 
 def get_kps_ranges(orb_images: ORBImageList):
     kp_ranges = np.array([0], dtype=np.uint32)  # indicated at which ID an image starts/end
 
     for oi in orb_images:
-        n_kps = kp_ranges[-1] + len(oi.kps)
+        n_kps = kp_ranges[-1] + oi.n_kps
         kp_ranges = np.append(kp_ranges, n_kps)
     
     return kp_ranges
