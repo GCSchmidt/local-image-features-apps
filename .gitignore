@@ -11,6 +11,7 @@ build/
 # File types
 *.Identifier
 *.jpg
+*.JPG
 *.png
 *.log
 
