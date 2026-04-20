@@ -3,6 +3,7 @@
 """
 import cv2
 import os
+import numpy as np
 
 from core.types import ORBDescriptors, KPGroup, KnnMatchesList
 
@@ -13,10 +14,15 @@ class ORBImage():
 
     def __init__(self, file_path: str) -> None:
         self._file_path = file_path
+        self._shape: np.ndarray
         self._kps: KPGroup | None = None
         self._descriptors: ORBDescriptors | None = None
         self._matches: KnnMatchesList | None = None
 
+    @property
+    def shape(self) -> np.ndarray:
+        return self._shape
+    
     @property
     def kps(self):
         return self._kps
@@ -44,6 +50,7 @@ class ORBImage():
         img = cv2.imread(self._file_path, cv2.IMREAD_GRAYSCALE)
         if img is None:
             raise ValueError(f"Could not load image: {self._file_path}")
+        self._shape = img.shape[:2]  # (height, width)
         kps, desc = ORBImage.__orb.detectAndCompute(img, None)
         if kps:
             self._kps = kps
