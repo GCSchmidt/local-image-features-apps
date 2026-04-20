@@ -12,3 +12,20 @@ class MatchCountStrategy(Enum):
 class ConnectivityMatrixMode(Enum):
     RATIO = 0
     COUNT = 1
+
+
+class ValidConnection(Enum):
+    """
+    Indicates whether a connection between a pair of images has been verified with inliers of the homography.
+    """
+    UNKNOWN = -1
+    NOTCONNECTED = 0
+    CONNECTED = 1
+
+
+class HomographyReference(Enum):
+    """
+    Wether homography should map from/to the base image 
+    """
+    TOBASE = 0
+    FROMBASE = 1
