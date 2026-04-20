@@ -1,13 +1,31 @@
 import argparse
+import logging
 import cv2
 import numpy as np
 import utils.file_utils as file_utils
-from image_stitching.models import Panorama, StitchedImage, CVPanorama
+from core.constants import LOG_DIR 
+from image_stitching.PanoMatcher import PanoMatcher
 
 
 def main(args):
-    panorama = Panorama(args.folder_path)
-    panorama.generate_panorama()
+    if args.log:
+        logger = logging.getLogger("image_stitching")
+        logger.setLevel(logging.DEBUG)
+        logger.propagate = False
+
+        file_handler = logging.FileHandler(LOG_DIR + 'image_stitching.log', mode='w')
+        file_handler.setLevel(logging.DEBUG)
+
+        formatter = logging.Formatter(
+            '%(asctime)s - %(filename)s:%(lineno)d - %(levelname)s\n%(message)s'
+        )
+        file_handler.setFormatter(formatter)
+
+        logger.addHandler(file_handler)
+
+    file_paths = file_utils.get_image_files(args.folder_path)
+    PM = PanoMatcher(file_paths)
+    PM.generate_panorama()
     return
 
 
@@ -21,7 +39,7 @@ def parse_arguments():
                     epilog='Have fun!')
 
     parser.add_argument('folder_path', help="path to folder containing images")  # positional argument
-    # parser.add_argument('--log', action='store_true', help="Enables logging to file")  # on/off flag
+    parser.add_argument('--log', action='store_true', help="Enables logging to file")
     args = parser.parse_args()
     return args
 
