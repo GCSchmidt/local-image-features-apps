@@ -5,7 +5,7 @@ from typing import TypeAlias
 import core.constants as const
 from core.types import KnnMatches, KnnMatchesList, ORBDescriptors
 from core.enums import MatchCountStrategy as MCS
-from classes.ORBImage import ORBImage 
+from classes.ORBImage import ORBImage
 
 ########################
 # Types
@@ -103,13 +103,35 @@ def assign_matches_to_orb_images(orb_imags: list[ORBImage], matches: KnnMatchesL
         oi.set_matches(matches[lower:upper])
         lower = upper
 
-        for omatch in t_matches[1:]:  # skip 1st because its always invalid (match with itself)
-            # omatch: cv2.DMatch
-            query_id = omatch.queryIdx
-            train_id = omatch.trainIdx
-            if not is_valid_match(query_id, train_id):
-                continue
-            l_matches.append(omatch)
-        valid_matches.append(l_matches)
-    
-    return valid_matches
+
+def get_best_image_matches(match_counts: np.ndarray, img_id):
+    n_images = match_counts.shape[0]
+    M = const.M_CANDIDATE_IMAGES
+    M = min(M, n_images-1)
+    counts = match_counts[img_id]
+    ranked_img_ids = np.argpartition(counts, -M)[-M:]
+    ranked_img_ids = ranked_img_ids[np.argsort(counts[ranked_img_ids])[::-1]]
+    return ranked_img_ids
+
+
+def count_features_in_overlap(orb_img1: ORBImage, orb_img2: ORBImage, H: np.ndarray) -> int:
+    if orb_img1.kps is None:
+        return 0
+
+    kps1 = orb_img1.kps
+    h2, w2 = orb_img2.shape
+
+    src_pts = np.empty((len(kps1), 1, 2), dtype=np.float32)
+    for i, kp in enumerate(kps1):
+        src_pts[i, 0, 0] = kp.pt[0]
+        src_pts[i, 0, 1] = kp.pt[1]
+
+    dst_pts = cv2.perspectiveTransform(src_pts, H)
+
+    count = 0
+    for i in range(len(kps1)):
+        px, py = dst_pts[i, 0]
+        if 0 <= px <= w2 and 0 <= py <= h2:
+            count += 1
+
+    return count
