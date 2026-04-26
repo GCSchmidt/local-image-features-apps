@@ -1,6 +1,12 @@
 from enum import Enum, auto
 
 
+# Feature Detectors
+class FeatureDetectorType(Enum):
+    ORB = 1
+    SIFT = 2
+
+
 # Panoroma
 class MatchCountStrategy(Enum):
     ALL = auto()    # count all raw matches
