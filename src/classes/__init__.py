@@ -1,2 +1,3 @@
-# src/my_package/classes/__init__.py
-# empty
+from classes.FeatureImage import FeatureImage
+from classes.ORBImage import ORBImage
+from classes.SiftImage import SiftImage

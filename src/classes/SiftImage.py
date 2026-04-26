@@ -6,16 +6,9 @@ import cv2
 from classes.FeatureImage import FeatureImage
 
 
-class ORBImage(FeatureImage):
+class SiftImage(FeatureImage):
 
-    __orb = cv2.ORB_create(
-        nfeatures=1000,
-        scaleFactor=1.2,
-        nlevels=8,
-        edgeThreshold=31,
-        fastThreshold=20,
-        scoreType=cv2.ORB_HARRIS_SCORE
-    )
+    __sift = cv2.SIFT_create()
 
     def __init__(self, file_path: str) -> None:
         super().__init__(file_path)
@@ -25,7 +18,7 @@ class ORBImage(FeatureImage):
         if img is None:
             raise ValueError(f"Could not load image: {self._file_path}")
         self._shape = img.shape[:2]
-        kps, desc = ORBImage.__orb.detectAndCompute(img, None)
+        kps, desc = SiftImage.__sift.detectAndCompute(img, None)
         if kps:
             self._kps = kps
         if desc is not None:
