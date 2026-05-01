@@ -4,20 +4,19 @@ import cv2
 import numpy as np
 import networkx as nx
 from core.constants import KNN_FOR_PANORAMA, M_CANDIDATE_IMAGES, INLIER_THRESHOLD, MIN_INLIERS, MAX_IMAGE_DIM
-from core.enums import FeatureDetectorType
 import image_stitching.pipeline as pipeline
 from image_stitching.panograph import ImageConnection, PanoGraph
 from image_stitching.bundle_adjuster import BundleAdjuster, BundleResult
-from classes.ORBImage import ORBImage
-from classes.SiftImage import SiftImage
-from classes.FeatureImage import FeatureImage
+from classes.orb_image import ORBImage
+from classes.sift_image import SiftImage
+from classes.feature_image import FeatureImage
 from utils import file_utils
 
 
 logger = logging.getLogger("image_stitching")
 
 
-class PanoMatcher:
+class PanoMaker:
 
     def __init__(self, image_paths: list[str], detector: type[FeatureImage] = SiftImage) -> None:
         self._images = [detector(path, max_dim=MAX_IMAGE_DIM) for path in image_paths]

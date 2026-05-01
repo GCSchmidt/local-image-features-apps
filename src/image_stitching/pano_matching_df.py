@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from classes.ORBImage import ORBImage
+from classes.orb_image import ORBImage
 from core.types import KnnMatchesList
 from image_stitching import pipeline
 from core.enums import MatchCountStrategy as MCS

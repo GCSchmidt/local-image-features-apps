@@ -3,7 +3,6 @@ import networkx as nx
 import cv2
 import matplotlib.pyplot as plt
 import pandas as pd
-from image_stitching import models
 from core.enums import ConnectivityMatrixMode
 
 

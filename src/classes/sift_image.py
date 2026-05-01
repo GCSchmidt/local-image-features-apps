@@ -3,7 +3,7 @@
 """
 import cv2
 
-from classes.FeatureImage import FeatureImage
+from classes.feature_image import FeatureImage
 
 
 class SiftImage(FeatureImage):

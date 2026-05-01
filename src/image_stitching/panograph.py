@@ -1,10 +1,9 @@
 import networkx as nx
 import numpy as np
-import logging 
+import logging
 from dataclasses import dataclass, field
 
 from core.enums import ValidConnection, HomographyReference
-import image_stitching.pipeline as pipeline 
 
 
 logger = logging.getLogger("image_stitching")

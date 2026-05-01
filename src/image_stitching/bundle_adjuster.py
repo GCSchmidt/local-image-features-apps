@@ -4,8 +4,8 @@ from dataclasses import dataclass, field
 from scipy.optimize import least_squares
 
 import image_stitching.pipeline as pipeline
-from image_stitching.PanoGraph import ImageConnection, PanoGraph
-from classes.FeatureImage import FeatureImage
+from image_stitching.panograph import ImageConnection, PanoGraph
+from classes.feature_image import FeatureImage
 
 
 logger = logging.getLogger("image_stitching")

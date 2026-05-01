@@ -3,13 +3,16 @@ import numpy as np
 from typing import TypeAlias
 from shapely.geometry import Polygon, Point
 from shapely import contains_xy
-
+import logging
 import core.constants as const
 from core.types import KnnMatches, KnnMatchesList, ORBDescriptors, MatchList
 from core.enums import MatchCountStrategy as MCS
 from image_stitching.panograph import ImageConnection, PanoGraph
-from classes.ORBImage import ORBImage
-from classes.FeatureImage import FeatureImage
+from classes.orb_image import ORBImage
+from classes.feature_image import FeatureImage
+
+
+logger = logging.getLogger("image_stitching")
 
 
 ########################
@@ -22,12 +25,6 @@ FeatureImageList: TypeAlias = list[FeatureImage]
 ########################
 # Matching Images
 ########################
-def match_orb_images(orb_images: ORBImageList, k: int) -> KnnMatches:
-    descriptors = combine_descriptors(orb_images)
-    matches = match_features(descriptors, descriptors, k)
-    return matches
-
-
 def match_images(images: FeatureImageList, k: int) -> KnnMatches:
     descriptors = combine_descriptors(images)
     return match_features(descriptors, descriptors, k)

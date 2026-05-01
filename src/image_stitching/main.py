@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import utils.file_utils as file_utils
 from core.constants import LOG_DIR 
-from image_stitching.PanoMatcher import PanoMatcher
+from image_stitching.pano_maker import PanoMaker
 
 
 def main(args):
@@ -24,7 +24,7 @@ def main(args):
         logger.addHandler(file_handler)
 
     file_paths = file_utils.get_image_files(args.folder_path)
-    PM = PanoMatcher(file_paths)
+    PM = PanoMaker(file_paths)
     PM.generate_panorama()
     return
 
