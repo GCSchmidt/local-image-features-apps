@@ -56,10 +56,10 @@ def plot_connectivity_matrix(matrix: np.ndarray, image_names: list[str]):
     plt.show()
 
 
-def plot_panorama_graph(graph: models.PanoramaGraph):   
-    pos = nx.spring_layout(graph.graph)
+def plot_panorama_graph(graph: nx.Graph):   
+    pos = nx.spring_layout(graph)
     # Draw graph
-    nx.draw(graph.graph, pos, with_labels=True)
+    nx.draw(graph, pos, with_labels=True)
     plt.show()
 
 
