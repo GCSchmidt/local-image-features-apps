@@ -14,24 +14,7 @@ MIN_MATCH_COUNT = 10
 
 
 # Create a logger for this module
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-logger.propagate = False
-
-# Create a file handler (unique to this module)
-log_path = os.path.join(file_utils.LOG_PATH, 'image_stitching/models.log')
-file_handler = logging.FileHandler(log_path, mode='w')  # overwrite/replace the file 
-file_handler.setLevel(logging.DEBUG)
-
-# Optional formatter
-formatter = logging.Formatter(
-    '%(asctime)s - %(filename)s:%(lineno)d - %(levelname)s\n%(message)s'
-)
-file_handler.setFormatter(formatter)
-
-# Add the handler if not already added (to avoid duplicates)
-if not logger.handlers:
-    logger.addHandler(file_handler)
+logger = logging.getLogger("image_stitching")
 
 
 class ValidConnection(Enum):
@@ -50,194 +33,157 @@ class HomographyReference(Enum):
     TOBASE = 0
     FROMBASE = 1
 
+
 @dataclass
 class ImageConnection:
     weight: float  # 1 - percentage of matches 
     inliers: int  # number of inliers
     valid_connection: ValidConnection
-    homography: np.ndarray  # homography describing transfrom from image with lower index to higher
+    homography: np.ndarray  # homography describing transfrom from reference to target
     reference: int  # id of base image
     target: int  # id of target image
 
 
-class StitchedImage():
-    """
-    A class that is used to construct the panorama result / final image.
-    """
-    def __init__(self, img_paths) -> None:
-        self.img_paths = img_paths
-        N = len(self.img_paths)
-        self.homographies = np.tile(np.identity(3), (N, 1, 1))
-        self.final_img = cv2.imread(img_paths[0], cv2.IMREAD_COLOR_BGR)
-        self.connected = set([0])
-
-    def is_connected(self, img_id:int) -> bool:
-        return (img_id in self.connected)
-
-    def stitch_image(self, img_id: int):
-        H = self.homographies[img_id]
-        
-        h1, w1 = self.final_img.shape[:2]
-
-        new_img_path = self.img_paths[img_id]
-        new_img = cv2.imread(new_img_path, cv2.IMREAD_COLOR_BGR)
-        h2, w2 = new_img.shape[:2]
-
-        # Corners of new_img being stitched
-        corners_img2 = np.array([[0,0],[0,h2],[w2,h2],[w2,0]], dtype=np.float32).reshape(-1,1,2)
-        # Warp corners into img1's frame using H
-        warped_corners = cv2.perspectiveTransform(corners_img2, H)
-
-        # Corners of final_img
-        corners_final_img = np.array([[0,0],[0,h1],[w1,h1],[w1,0]], dtype=np.float32).reshape(-1,1,2)
-
-        # All corners together to find canvas size
-        all_corners = np.concatenate((warped_corners, corners_final_img), axis=0)
-        [xmin, ymin] = np.int32(all_corners.min(axis=0).ravel() - 0.5)
-        [xmax, ymax] = np.int32(all_corners.max(axis=0).ravel() + 0.5)
-
-        # Translation matrix to shift everything into positive coordinates
-        translation = np.array([[1,0,-xmin],[0,1,-ymin],[0,0,1]])
-
-        final_img_copy = self.final_img.copy()
-        # Warp new_img into canvas
-        self.final_img = cv2.warpPerspective(new_img, translation @ H, (xmax - xmin, ymax - ymin))
-        # Place the original/base final_img into canvas
-        self.final_img[-ymin:h1 - ymin, -xmin:w1 - xmin] = final_img_copy
-
-    def update_homography(self, img_id1: int, img_id2: int, H1_2: np.ndarray):
+class ImageProcessor():
+    
+    @staticmethod
+    def reduce_res(image: np.ndarray, max_dimension: int = 500) -> np.ndarray:
         """
-        Use the transformation from img_id1 to img_id2, 
-        to update the transform from base to img_id2
+        Scales the image down such that the its longest dimension is reduced to the desired maximum length. 
+
         Args:
-            img_id1 (int): reference (image to connect)
-            img_id2 (int): target image (image connected already connected)
-            H1_2 (np.ndarray): homography from reference to target
+            image (np.ndarray): image to rescale
+            max_dimension (int, optional): max length of width or height of the image. Defaults to 1_000.
         """
-        if not self.is_connected(img_id2):
-            logger.debug(f"Failed to update homography of Img {img_id1} with the homography of Img {img_id2}." +
-                         f"Img {img_id2} not yet added to connected: {self.connected}")
-            return
-        logger.debug(f"Homography from Img {img_id1} to Img {img_id2}:\n{H1_2}")
+        h, w = image.shape[:2]
 
-        H2_0 = self.homographies[img_id2]  # TF from img ID 2 to base  
-        H1_0 = H2_0 @ H1_2 # TF from img ID 1 to base  
-        self.homographies[img_id1] = H1_0
-        h_list = [str(x) for x in self.homographies]
-        logger.debug("\n".join(h_list))
-        self.connected.add(img_id1)
-        logger.debug(f"Img {img_id1} connected via {img_id2}\nconnected set: {self.connected}")
+        if h > w and h > max_dimension:
+            scale = max_dimension / h
+        elif w > h and w > max_dimension:
+            scale = max_dimension / w
+        else:
+            return image
+        
+        resized_image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)     
+        resized_image = cv2.GaussianBlur(resized_image, (3, 3), 0)  # denoise
+
+        return image
+
+
+class StitchedImage():
+    def __init__(self, img_paths: list[str], homographies: dict[int, np.ndarray],
+                 base_id: int, max_output_size: int = 4096) -> None:
+        self.img_paths = img_paths
+        self.homographies = homographies
+        self.base_id = base_id
+        self.max_output_size = max_output_size
+        self.scale_factor = self._compute_scale_factor()
+        self.final_img: np.ndarray
+        self.canvas: np.ndarray
+        self.T: np.ndarray
+        self.x_min: int
+        self.y_min: int
+
+    def _compute_scale_factor(self) -> float:
+        n = len(self.img_paths)
+        scale = max(0.3, 1.0 - (n - 1) * 0.1)
+        return scale
 
     def stitch_images(self):
-        # Load all images
-        imgs = [cv2.imread(p) for p in self.img_paths]
-        base = imgs[0]
+        self._create_canvas()
+        self._place_base_image()
+        for img_id in self.homographies:
+            if img_id != self.base_id:
+                self._warp_image(img_id)
+        self._crop_to_content()
+        self._downsample_if_needed()
 
-        # Homographies (all should be image -> base frame)
-        Hs = [np.eye(3)] + list(self.homographies[1:])
-
-        # Compute canvas size in original coordinates
+    def _create_canvas(self):
         all_corners = []
-        for img, H in zip(imgs, Hs):
+        for img_id, H in self.homographies.items():
+            img = cv2.imread(self.img_paths[img_id], cv2.IMREAD_COLOR_BGR)
             h, w = img.shape[:2]
-            corners = np.array([[0,0], [w,0], [w,h], [0,h]], dtype=np.float32)
-            warped = cv2.perspectiveTransform(corners.reshape(-1,1,2), H)
-            all_corners.append(warped.reshape(-1,2))
+            h_scaled, w_scaled = int(h * self.scale_factor), int(w * self.scale_factor)
+            H_scaled = H.copy().astype(np.float64)
+            H_scaled[0, 2] *= self.scale_factor
+            H_scaled[1, 2] *= self.scale_factor
+            corners = np.array([[0, 0], [w_scaled, 0], [w_scaled, h_scaled], [0, h_scaled]],
+                               dtype=np.float32).reshape(-1, 1, 2)
+            warped = cv2.perspectiveTransform(corners, H_scaled.astype(np.float32)).reshape(-1, 2)
+            all_corners.append(warped)
         all_corners = np.vstack(all_corners)
-
         x_min, y_min = np.floor(all_corners.min(axis=0)).astype(int)
         x_max, y_max = np.ceil(all_corners.max(axis=0)).astype(int)
+        self.x_min, self.y_min = x_min, y_min
+        self.T = np.array([[1, 0, -x_min],
+                           [0, 1, -y_min],
+                           [0, 0, 1]], dtype=np.float64)
+        canvas_h = y_max - y_min
+        canvas_w = x_max - x_min
+        self.canvas = np.zeros((canvas_h, canvas_w, 3), dtype=np.uint8)
 
-        canvas_w, canvas_h = x_max - x_min, y_max - y_min
+    def _place_base_image(self):
+        base_img = cv2.imread(self.img_paths[self.base_id], cv2.IMREAD_COLOR_BGR)
+        base_img = cv2.resize(base_img,
+                              None,
+                              fx=self.scale_factor,
+                              fy=self.scale_factor,
+                              interpolation=cv2.INTER_AREA
+                              )
+        base_H = self.T @ self.homographies[self.base_id]
+        base_H = base_H.copy().astype(np.float64)
+        base_H[0, 2] *= self.scale_factor
+        base_H[1, 2] *= self.scale_factor
+        warped = cv2.warpPerspective(base_img, base_H.astype(np.float32),
+                                     (self.canvas.shape[1], self.canvas.shape[0]))
+        self.canvas = warped
 
-        # Scale factor
-        MAX_DIM = 3000
-        scale = min(1.0, MAX_DIM / max(canvas_w, canvas_h))
+    def _warp_image(self, img_id: int):
+        img = cv2.imread(self.img_paths[img_id], cv2.IMREAD_COLOR_BGR)
+        img = cv2.resize(img, None, fx=self.scale_factor, fy=self.scale_factor,
+                        interpolation=cv2.INTER_AREA)
+        H_total = self.T @ self.homographies[img_id]
+        H_total = H_total.copy().astype(np.float64)
+        H_total[0, 2] *= self.scale_factor
+        H_total[1, 2] *= self.scale_factor
+        warped = cv2.warpPerspective(img, H_total.astype(np.float32),
+                                     (self.canvas.shape[1], self.canvas.shape[0]))
+        mask = (warped > 0)
+        self.canvas[mask] = warped[mask]
 
-        # Scale images
-        scaled_imgs = [cv2.resize(img, None, fx=scale, fy=scale) for img in imgs]
+    def _crop_to_content(self):
+        gray = cv2.cvtColor(self.canvas, cv2.COLOR_BGR2GRAY)
+        coords = cv2.findNonZero(gray)
+        x, y, w, h = cv2.boundingRect(coords)
+        self.canvas = self.canvas[y:y+h, x:x+w]
+        self.final_img = self.canvas
 
-        # Correct homography scaling:  H_scaled = S * H * S⁻¹
-        S = np.array([[scale, 0, 0],
-                    [0, scale, 0],
-                    [0, 0, 1]], dtype=np.float32)
-        S_inv = np.linalg.inv(S)
-
-        scaled_Hs = [S @ H @ S_inv for H in Hs]
-
-        # Compute new canvas translation
-        all_corners_scaled = []
-        for img, H in zip(scaled_imgs, scaled_Hs):
-            h, w = img.shape[:2]
-            corners = np.array([[0,0], [w,0], [w,h], [0,h]], dtype=np.float32)
-            warped = cv2.perspectiveTransform(corners.reshape(-1,1,2), H)
-            all_corners_scaled.append(warped.reshape(-1,2))
-        all_corners_scaled = np.vstack(all_corners_scaled)
-
-        x_min, y_min = np.floor(all_corners_scaled.min(axis=0)).astype(int)
-        x_max, y_max = np.ceil(all_corners_scaled.max(axis=0)).astype(int)
-
-        tx, ty = -x_min, -y_min
-        T = np.array([[1, 0, tx],
-                    [0, 1, ty],
-                    [0, 0, 1]], dtype=np.float32)
-
-        # Create final canvas
-        self.final_img = np.zeros((y_max - y_min, x_max - x_min, 3), dtype=np.uint8)
-
-        # Warp each image
-        for img, H in zip(scaled_imgs, scaled_Hs):
-            Ht = T @ H
-            cv2.warpPerspective(
-                img, Ht,
-                (self.final_img.shape[1], self.final_img.shape[0]),
-                self.final_img,
-                borderMode=cv2.BORDER_TRANSPARENT
-            )
-            
-    def stitch_images2(self):
-        def corners(img, H):
-            h, w = img.shape[:2]
-            pts = np.array([[0,0], [w,0], [w,h], [0,h]], np.float32).reshape(-1,1,2)
-            return cv2.perspectiveTransform(pts, H).reshape(-1,2)
-        
-        images = [cv2.imread(path, cv2.IMREAD_COLOR_BGR) for path in self.img_paths]
-        homographies = self.homographies
-
-        all_pts = np.vstack([corners(img, H) for img, H in zip(images, homographies)])
-        x_min, y_min = np.floor(all_pts.min(axis=0)).astype(int)
-        x_max, y_max = np.ceil(all_pts.max(axis=0)).astype(int)
-
-        trans = np.array([[1,0,-x_min],[0,1,-y_min],[0,0,1]], np.float64)
-        width, height = x_max - x_min, y_max - y_min
-
-        acc = np.zeros((height, width, 3), np.float32)
-        count = np.zeros((height, width, 1), np.float32)
-
-        for img, H in zip(images, homographies):
-            Ht = trans @ H
-            warped = cv2.warpPerspective(img, Ht, (width, height))
-            mask = (warped > 0).astype(np.float32)
-            acc += warped.astype(np.float32)
-            count += mask[..., :1]
-
-        self.final_img = np.divide(acc, np.maximum(count, 1), where=count>0).astype(np.uint8)
+    def _downsample_if_needed(self):
+        h, w = self.final_img.shape[:2]
+        max_dim = max(h, w)
+        if max_dim <= self.max_output_size:
+            return
+        scale = self.max_output_size / max_dim
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+        self.final_img = cv2.resize(self.final_img, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
     def display(self):
-        cv2.imshow('Sticthed Image', self.final_img)
+        cv2.imshow('Stitched Image', self.final_img)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
-        
+
     def save(self):
         output_path = os.path.join(file_utils.OUTPUT_PATH, r"panorama.jpg")
         success = cv2.imwrite(output_path, self.final_img)
+        return success
 
 
 class PanoramaGraph():
 
     def __init__(self, match_threshold) -> None:
         self.graph = nx.Graph()
-        self.match_threshold = match_threshold  # ration of matches needed to be possible connection       
+        self.match_threshold = match_threshold  # ratio of matches needed to be possible connection       
         self.fully_connected = False
         self.base_node = 0
 
@@ -295,9 +241,17 @@ class PanoramaGraph():
                 edges_to_remove.append((u, v))
 
         self.graph.remove_edges_from(edges_to_remove)
+        self.get_base_node()
 
     def get_minimum_spanning_tree(self):
         self.graph = nx.minimum_spanning_tree(self.graph)
+        self.get_base_node()
+
+    def keep_largest_connected_group(self):
+        largest_nodes = max(nx.connected_components(self.graph), key=len)
+        nodes_to_remove = set(self.graph.nodes) - largest_nodes
+        self.graph.remove_nodes_from(nodes_to_remove)
+        self.get_base_node()
 
     def get_homographies(self, reference: HomographyReference = HomographyReference.TOBASE) -> dict[int, np.ndarray]:
         """
@@ -311,20 +265,19 @@ class PanoramaGraph():
 
         while queue:
             current = queue.popleft()
-            current_H = homographies[current]
+            H_1_0 = homographies[current]
 
             for neighbor in self.graph[current]:
                 if neighbor not in homographies:
                     ic = self.graph[current][neighbor]["data"]
-                    H = ic.homography
+                    # Get H from neighbor to current
+                    H_2_1 = ic.homography
                     if ic.reference == current:
-                        # default want target to base
-                        # reverse direction → invert homography
-                        edge_H = np.linalg.inv(H)
-                    else:
-                        edge_H = H
+                        H_2_1 = np.linalg.inv(H_2_1)
 
-                    homographies[neighbor] = current_H @ edge_H
+                    H_2_0 = H_1_0 @ H_2_1
+                    H_2_0 /= H_2_0[2, 2]
+                    homographies[neighbor] = H_2_0
                     queue.append(neighbor)
 
         if reference == HomographyReference.FROMBASE:
@@ -332,7 +285,6 @@ class PanoramaGraph():
                 homographies[img_id] = np.linalg.inv(homographies[img_id])
 
         return homographies
-
 
     def get_homography_from_to(self, target_id: int, reference: HomographyReference = HomographyReference.TOBASE) -> np.ndarray:
         """
@@ -368,6 +320,15 @@ class PanoramaGraph():
 
         return H_total
 
+    def get_image_connection(self, node1: int, node2: int) -> ImageConnection:
+        ic = self.graph[node1][node2]["data"]
+        return ic
+    
+    def set_image_connection(self, node1: int, node2: int, ic: ImageConnection) -> None:
+        self.graph[node1][node2]["weight"] = ic.weight
+        self.graph[node1][node2]["data"] = ic
+        return ic
+    
 
 class Panorama():
 
@@ -376,11 +337,12 @@ class Panorama():
         self.image_files = file_utils.get_image_files(path)
         self.matching_df: pd.DataFrame
         self.img_id_bounds: np.ndarray
-        self.K = min(len(self.image_files), 5)  # find K-nearest neighbours for each feature
-        min_n_imgs = max(1, len(self.image_files)-1)
-        self.M = min(min_n_imgs, 3)  # number of images to check for connection
-        self.connection_threshold = 0.25  # ration of matches between 2 images, needed to check for possible connection
-        self.inlier_threshold = 0.15  # inlier ratio needed to confirm a connection between images
+        self.K = min(len(self.image_files), 8)  # find K-nearest neighbours for each feature
+        M_min = max(1, len(self.image_files)-1)
+        self.M = min(M_min, 3)  # max number of images to verify connection
+        self.connection_threshold = 1 / (len(self.image_files) + 1)  # ration of matches between 2 images, needed to check for possible connection
+        self.inlier_ratio_threshold = 0.20 # inlier ratio needed to confirm a connection between images (inliers / number of good matches)
+        self.inlier_count_threshold = 50  # inlier ratio needed to confirm a connection between images (inliers / number of good matches)
         self.SI: StitchedImage
         self.PG = PanoramaGraph(self.connection_threshold)
 
@@ -408,6 +370,8 @@ class Panorama():
     def generate_graph(self):
         kps = self.detect()
         _ = self.match_all_images()
+        log_msg = self.get_matching_stats_string()
+        logger.debug(log_msg)
         match_ratios = self.match_ratio_matrix()
         self.PG.initialize_graph(match_ratios)
         self.establish_connections(kps)
@@ -421,7 +385,7 @@ class Panorama():
             tuple: tuple of OpenCV KeyPoint Objs
         """
         orb = cv2.ORB_create()
-        self.img_id_bounds = np.array([0], dtype=np.uint32)  # indicated at which ID an image starts/end
+        self.img_id_bounds = np.array([0], dtype=np.uint32)  # indicates at which ID an image starts/end
         N = 0
         des = np.empty((0, 32), dtype=np.uint8)  # data type is crucial!
         img_ids = np.empty((0))
@@ -429,6 +393,7 @@ class Panorama():
 
         for img_id, img_path in enumerate(self.image_files): 
             img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+            # img = ImageProcessor.reduce_res(img)
             kp_new, des_new = orb.detectAndCompute(img, None)  # type: ignore
             des = np.vstack((des, des_new))
             kps += kp_new
@@ -465,7 +430,7 @@ class Panorama():
         search_params = dict(checks=50)   # or pass empty dictionary
         flann = cv2.FlannBasedMatcher(index_params, search_params)
         des = np.stack(list(self.matching_df["Descriptor"]))
-        K = self.K * 2 # so that we are sure to have more matches after reduction 
+        K = self.K + 1  # first match is always invalid
         matches = flann.knnMatch(des, des, k=K)
         distance_col = list()  # distances of match column 
         # create a list version of matches
@@ -487,7 +452,7 @@ class Panorama():
         self.matching_df['Distances'] = distance_col
         self.add_matched_imgids_col()
         # remove (invalid) matches from the same image, also modifies matches_list
-        self.matching_df[["Matched_Ids", "Matched_ImgIds"]] = self.matching_df.apply(self.remove_invalid_matches, axis=1, args=(matches_list,))
+        self.matching_df[["Matched_Ids", "Matched_ImgIds", "Distances"]] = self.matching_df.apply(self.remove_invalid_matches, axis=1, args=(matches_list,))
         return matches_list
 
     def keep_top_n_matches(self, n):
@@ -498,7 +463,7 @@ class Panorama():
         for col in ["Matched_Ids", "Matched_ImgIds", "Distances"]:
             self.matching_df[col] = self.matching_df[col].map(lambda x: x[:n])
 
-    def match_two_images(self, img_id1: int, img_id2: int, K) -> list[tuple[int, int]]:
+    def match_two_images(self, img_id1: int, img_id2: int, K):
         """
         Generate a list keypoint id pairs identifying which keypoints from the 2 images are matched.
 
@@ -538,7 +503,7 @@ class Panorama():
                 kp_id_pair = (kp_id1, kp_id2)
                 matched_id_pairs.append(kp_id_pair)
 
-        return matched_id_pairs
+        return matched_id_pairs, matches
 
     def add_matched_imgids_col(self) -> None:
         """
@@ -589,15 +554,15 @@ class Panorama():
         Returns:
             series: a series for containing the updated Matched_Ids and Matched_ImgIds, with invalid values removed.
         """
-        index, matched_ids, img_ids, imgId = int(row.name), row['Matched_Ids'], row['Matched_ImgIds'], row['ImgId'] 
+        index, matched_ids, img_ids, distances, imgId = int(row.name), row['Matched_Ids'], row['Matched_ImgIds'], row['Distances'], row['ImgId'] 
         indeces_to_remove = np.where(img_ids == imgId)
-        # create mask to remove values
         mask = np.ones(len(matched_ids), dtype=bool)
         mask[indeces_to_remove] = False
         matched_ids = matched_ids[mask, ...]
         img_ids = img_ids[mask, ...]
+        distances = distances[mask]
         matches_list[index] = list(compress(matches_list[index], mask))
-        return pd.Series([matched_ids, img_ids])
+        return pd.Series([matched_ids, img_ids, distances])
 
     def get_number_of_matches_per_image_pair(self) -> pd.DataFrame:
         """
@@ -678,33 +643,56 @@ class Panorama():
     
     def rank_image_connections(self) -> dict[int, list[int]]:
         temp_df = self.get_number_of_good_matches_per_image_pair()
-        logger.debug(f"Matches Per Image Pair:\n {temp_df.to_string()}")
         img_connections_ranked = (
             temp_df.sort_values(['ImgId', 'Count'], 
                                 ascending=[True, False]).groupby('ImgId')['MatchedWith'].apply(list).to_dict()
             )
         return img_connections_ranked
-
-    def print_matching_stats(self):
+    
+    def get_matching_stats_string(self) ->str:
         """
-        Prints the the number of matches (counts and ratio) between images
+        Generates the the number of matches (counts and ratio) between images
         """
         rankings = self.rank_image_connections()
         M_count = self.match_count_matrix()
         M_ratio = self.match_ratio_matrix()
+        lines = []
 
         for id, arr in rankings.items():
             name = self.get_file_name(id)
-            lines = []
+            lines.append(f"{id} | {name}")
             for match_id in arr:
                 count = M_count[id][match_id]
                 ratio = M_ratio[id][match_id]
-                line = f"{match_id} | {self.get_file_name(match_id)} | {count} | {ratio}"
-                lines.append(line)
-            ranking_str = "\n\t".join(lines)
-            print(f"{id} | {name}")
-            print(f"\t{ranking_str}\n")
+                lines.append(
+                    f"\t{match_id} | {self.get_file_name(match_id)} | {count} | {ratio:.2f}"
+                )
+            lines.append("")
 
+        return "\n".join(lines)
+    
+    def get_matching_stats_string2(self) ->str:
+        """
+        Generates the the number of matches (counts and ratio) between images
+        """
+        rankings = self.rank_image_connections2()
+        M_count = self.match_count_matrix()
+        M_ratio = self.match_ratio_matrix()
+        lines = []
+
+        for id, arr in rankings.items():
+            name = self.get_file_name(id)
+            lines.append(f"{id} | {name}")
+            for match_id in arr:
+                count = M_count[id][match_id]
+                ratio = M_ratio[id][match_id]
+                lines.append(
+                    f"\t{match_id} | {self.get_file_name(match_id)} | {count} | {ratio:.2f}"
+                )
+            lines.append("")
+
+        return "\n".join(lines)
+     
     def get_image_pair_matches(self, img_id1: int, img_id2: int) -> list[tuple[int, int]]:
         """
         Generates list of keypoint id pairs, from 2 image IDs. The result
@@ -721,7 +709,9 @@ class Panorama():
         sub_matching_df = self.get_sub_matching_df(img_id1, img_id2)
         matches = []
         for row in sub_matching_df.itertuples(index=True):
-            matches.extend(self.generate_match_pairs_from_row(row, img_id2))
+            match_pair = self.generate_match_pair_from_row(row, img_id2)
+            if match_pair is not None:
+                matches.append(match_pair)
         return matches
 
     def get_sub_matching_df(self, img_id1: int, img_id2: int) -> pd.DataFrame:
@@ -743,9 +733,9 @@ class Panorama():
             ]
         return sub_matching_df
 
-    def generate_match_pairs_from_row(self, row, img_id2: int) -> list[tuple[int, int]]:
+    def generate_match_pair_from_row(self, row, img_id2: int) -> tuple[int, int]:
         """
-        Generate all mathced keypoint pairs in a row of self.matching_df, 
+        Generate the best mathced keypoint pair in a row of self.matching_df, 
         that include specific target image.
 
         Args:
@@ -758,16 +748,45 @@ class Panorama():
         kp_id_img1 = int(row.Index)  # id of feature in reference image 
         matched_ids = np.array(row.Matched_Ids)  # ids of matched feature
         img_ids = np.array(row.Matched_ImgIds)  # ids of images of matched features
+        distances = np.array(row.Distances)  # distances of matches
         mask = img_ids == img_id2
-        valid_id = matched_ids[mask]  # reduce array with mask
-        matched_pairs = [(kp_id_img1, int(kp_id_img2)) for kp_id_img2 in valid_id]
-        return matched_pairs
+        valid_ids = matched_ids[mask]  # reduce array with mask
+        valid_distances = distances[mask]   
+        kp_id_img2 = valid_ids[0]
+        if len(valid_ids) > 1:
+            is_good_match = valid_distances[0] < 0.8 * valid_distances[1] 
+            if not is_good_match:
+                return None
+            
+        matched_pair = (kp_id_img1, int(kp_id_img2))
+        return matched_pair
+
+    def stitch_2(self, img_id1: int, img_id2: int) -> None:
+        """
+        Stitches the 2 selected images togther.
+
+        Args:
+            img_id1 (int): id of image
+            img_id2 (int): id of image
+        """
+
+        ic = self.PG.get_image_connection(img_id1, img_id2)
+        ref = ic.reference
+        base = ic.target 
+        Hs = {0: np.eye(3), 1: ic.homography}  # H from target to base
+        img_paths = [self.image_files[base], self.image_files[ref]]
+        IS = StitchedImage(img_paths, Hs, 0)
+        IS.stitch_images()
+        IS.save()
 
     def stitch(self) -> None:
         """
         """
-        pass
-
+        Hs = self.PG.get_homographies()
+        base_id = self.PG.base_node
+        IS = StitchedImage(self.image_files, Hs, base_id)
+        IS.stitch_images()
+        IS.save()
 
     def get_homogrphy(self, kps: tuple[cv2.KeyPoint], matched_kp_ids: list[tuple[int, int]]) -> tuple[np.ndarray, np.ndarray]:
         """
@@ -801,17 +820,22 @@ class Panorama():
     def establish_connections(self, kps):
         n_images = len(self.image_files)
         for ref_id in range(n_images):
+            logger.debug(f"Establishing Connection of img: {ref_id} AKA: {self.get_file_name(ref_id)}")
             target_ids = self.PG.get_k_closest_neighbors(ref_id, self.M)
             for target_id in target_ids:
-                edge = self.PG.graph[ref_id][target_id]
-                current_ic = edge['data']
+                logger.debug(f"\tChecking Connection with img: {target_id} AKA: {self.get_file_name(target_id)}",)
+                current_ic = self.PG.get_image_connection(ref_id, target_id)
                 if current_ic.valid_connection is not ValidConnection.CONNECTED:
                     new_ic = self.get_connection_between(ref_id, target_id, kps)
                     if new_ic.valid_connection == ValidConnection.CONNECTED:
-                        self.PG.graph[ref_id][target_id]['data'] = new_ic
+                        self.PG.set_image_connection(ref_id, target_id, new_ic)
+                        logger.debug(f"\tCONNECTED with {new_ic.inliers} inliers and {1-new_ic.weight} ratio")
                     elif new_ic.valid_connection == ValidConnection.NOTCONNECTED:
                         self.PG.graph.remove_edge(ref_id, target_id)
-        # self.PG.remove_invalid_edges()
+                        logger.debug(f"\tNOT CONNECTED with {new_ic.inliers} inliers and {1-new_ic.weight} ratio")
+                else:
+                    logger.debug(f"\tAlready CONNECTED with {current_ic.inliers} inliers and {1-current_ic.weight} ratio")
+        self.PG.remove_invalid_edges()
 
     def get_inlier_ratio(self, img_id1, n_inliers: int) -> float:
         """
@@ -834,7 +858,7 @@ class Panorama():
             return IC
         
         # case 2 img_id2 is reference
-        IC = self.get_connection_from_and_to(img_id1, img_id2, kps)
+        IC = self.get_connection_from_and_to(img_id2, img_id1, kps)
         if IC.valid_connection == ValidConnection.CONNECTED:
             return IC
         
@@ -850,10 +874,13 @@ class Panorama():
 
     def get_connection_from_and_to(self, img_id1, img_id2, kps) -> ImageConnection:
         matched_ids = self.get_image_pair_matches(img_id1, img_id2)
+        logger.debug(f"\t\tnumber of good matches used for RANSAC: {len(matched_ids)}")
         H, mask = self.get_homogrphy(kps, matched_ids)
         n_inliers = np.count_nonzero(mask)
-        inlier_ratio = self.get_inlier_ratio(img_id1, n_inliers)
-        if inlier_ratio > self.inlier_threshold:
+        inlier_ratio = n_inliers / len(matched_ids)
+        connection_check = inlier_ratio > self.inlier_ratio_threshold
+        connection_check &= n_inliers > self.inlier_count_threshold
+        if connection_check:
             valid_connection = ValidConnection.CONNECTED
         else:
             valid_connection = ValidConnection.NOTCONNECTED
@@ -882,6 +909,7 @@ class Panorama():
         images = [os.path.basename(self.image_files[node]) for node in nodes]
 
         return images
+
 
 class CVPanorama():
 
