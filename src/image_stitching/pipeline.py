@@ -250,50 +250,8 @@ def _resize_image(img: np.ndarray, max_dim: int) -> np.ndarray:
 
 
 ########################
-# Multiband Blending
+# Feather Blending
 ########################
-N_BANDS = 5
-
-
-def _build_gaussian_pyramid(image: np.ndarray, n_levels: int) -> list[np.ndarray]:
-    pyramid = [image]
-    level = image
-    for _ in range(n_levels - 1):
-        level = cv2.pyrDown(level)
-        pyramid.append(level)
-    return pyramid
-
-
-def _build_laplacian_pyramid(image: np.ndarray, n_levels: int) -> list[np.ndarray]:
-    gaussian = _build_gaussian_pyramid(image, n_levels)
-    laplacian = []
-    for i in range(n_levels - 1):
-        up_h = gaussian[i].shape[0]
-        up_w = gaussian[i].shape[1]
-        upsampled = cv2.pyrUp(gaussian[i + 1], dstsize=(up_w, up_h))
-        diff = gaussian[i].astype(np.float64) - upsampled.astype(np.float64)
-        laplacian.append(diff)
-    laplacian.append(gaussian[-1].astype(np.float64))
-    return laplacian
-
-
-def _reconstruct_from_laplacian(laplacian: list[np.ndarray]) -> np.ndarray:
-    result = laplacian[-1]
-    for i in range(len(laplacian) - 2, -1, -1):
-        up_h = laplacian[i].shape[0]
-        up_w = laplacian[i].shape[1]
-        upsampled = cv2.pyrUp(result.astype(np.float32), dstsize=(up_w, up_h))
-        result = upsampled.astype(np.float64) + laplacian[i]
-    return result
-
-
-def _create_distance_weights(masks: list[np.ndarray]) -> list[np.ndarray]:
-    weights = []
-    for mask in masks:
-        dist = cv2.distanceTransform(mask.astype(np.uint8), cv2.DIST_L2, 0)
-        weights.append(dist.astype(np.float64))
-    return weights
-
 
 def _compute_gains(
     warped_images: list[np.ndarray],
@@ -342,49 +300,42 @@ def _compute_gains(
     return gains
 
 
-def _blend_multiband(warped_images: list[np.ndarray], masks: list[np.ndarray], n_bands: int) -> np.ndarray:
-    raw_weights = _create_distance_weights(masks)
+def _blend_feather(warped_images: list[np.ndarray], masks: list[np.ndarray]) -> np.ndarray:
+    """Simple feather blending using distance transform weights at full resolution."""
+    n = len(warped_images)
+    h, w = warped_images[0].shape[:2]
+    is_color = warped_images[0].ndim == 3
 
-    image_pyr_lists = []
-    for warped in warped_images:
-        image_pyr_lists.append(_build_laplacian_pyramid(warped.astype(np.float64), n_bands))
+    # Initialize accumulators
+    if is_color:
+        blended = np.zeros((h, w, 3), dtype=np.float64)
+    else:
+        blended = np.zeros((h, w), dtype=np.float64)
+    weight_sum = np.zeros((h, w), dtype=np.float64)
 
-    weight_pyr_lists = []
-    for weights in raw_weights:
-        weight_pyr_lists.append(_build_gaussian_pyramid(weights, n_bands))
+    # Process each image
+    for warped, mask in zip(warped_images, masks):
+        # Distance transform - weight decreases with distance from mask center
+        dist = cv2.distanceTransform(mask.astype(np.uint8), cv2.DIST_L2, 0).astype(np.float64)
 
-    blended_laplacian = []
-    for level in range(n_bands):
-        level_weights = []
-        level_images = []
+        # Avoid zero weights
+        dist = np.maximum(dist, 1e-10)
 
-        for img_pyrs, w_pyrs in zip(image_pyr_lists, weight_pyr_lists):
-            level_images.append(img_pyrs[level])
-            level_weights.append(w_pyrs[level].astype(np.float64))
+        # Accumulate weighted image and weights
+        if is_color:
+            blended += dist[:, :, np.newaxis] * warped.astype(np.float64)
+        else:
+            blended += dist * warped.astype(np.float64)
+        weight_sum += dist
 
-        level_h, level_w = level_images[0].shape[:2]
+    # Normalize
+    weight_sum = np.maximum(weight_sum, 1e-10)
+    if is_color:
+        blended /= weight_sum[:, :, np.newaxis]
+    else:
+        blended /= weight_sum
 
-        resized_weights = []
-        for lw in level_weights:
-            if lw.shape[0] != level_h or lw.shape[1] != level_w:
-                lw = cv2.resize(lw, (level_w, level_h))
-            resized_weights.append(lw)
-
-        weight_sum = sum(resized_weights)
-        weight_sum[weight_sum == 0] = 1.0
-
-        blended_level = np.zeros_like(level_images[0], dtype=np.float64)
-        for rw, li in zip(resized_weights, level_images):
-            if li.ndim == 3:
-                rw = rw[:, :, np.newaxis]
-                weight_sum_b = weight_sum[:, :, np.newaxis]
-            else:
-                weight_sum_b = weight_sum
-            blended_level += (rw / weight_sum_b) * li
-        blended_laplacian.append(blended_level)
-
-    result = _reconstruct_from_laplacian(blended_laplacian)
-    return np.clip(result, 0, 255).astype(np.uint8)
+    return np.clip(blended, 0, 255).astype(np.uint8)
 
 
 ########################
@@ -465,7 +416,7 @@ def render_panorama(
             logger.debug(f"Per-image RGB gains: {gains.tolist()}")
             for i, warped in enumerate(warped_images):
                 warped_images[i] = np.clip(warped.astype(np.float64) * gains[i], 0, 255).astype(np.uint8)
-        final_img = _blend_multiband(warped_images, masks, N_BANDS)
+        final_img = _blend_feather(warped_images, masks)
 
     gray = cv2.cvtColor(final_img, cv2.COLOR_BGR2GRAY)
     coords = cv2.findNonZero(gray)
