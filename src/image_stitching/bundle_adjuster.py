@@ -18,24 +18,18 @@ class BundleResult:
     added_order: list[int] = field(default_factory=list)
 
 
-def _sim_to_matrix(scale: float, angle: float, tx: float, ty: float) -> np.ndarray:
-    c = np.cos(angle)
-    s = np.sin(angle)
+def _affine_to_matrix(a: float, b: float, c: float, d: float, tx: float, ty: float) -> np.ndarray:
     return np.array([
-        [scale * c, -scale * s, tx],
-        [scale * s,  scale * c, ty],
-        [0.0,        0.0,       1.0],
+        [a, b, tx],
+        [c, d, ty],
+        [0.0, 0.0, 1.0],
     ], dtype=np.float64)
 
 
-def _matrix_to_sim(H: np.ndarray) -> tuple[float, float, float, float]:
-    a, b = H[0, 0], H[0, 1]
-    c, d = H[1, 0], H[1, 1]
-    scale = np.sqrt(abs(a * d - b * c))
-    angle = np.arctan2(c - b, a + d)
-    tx = H[0, 2]
-    ty = H[1, 2]
-    return scale, angle, tx, ty
+def _matrix_to_affine(H: np.ndarray) -> tuple[float, float, float, float, float, float]:
+    return (float(H[0, 0]), float(H[0, 1]),
+            float(H[1, 0]), float(H[1, 1]),
+            float(H[0, 2]), float(H[1, 2]))
 
 
 class BundleAdjuster:
@@ -68,10 +62,10 @@ class BundleAdjuster:
                 added_order=added_order,
             )
 
-        sim_params = self._optimize_similarity(added_ids, homographies)
+        aff_params = self._optimize_affine(added_ids, homographies)
 
-        for img_id, (s, a, tx, ty) in sim_params.items():
-            homographies[img_id] = _sim_to_matrix(s, a, tx, ty)
+        for img_id, params in aff_params.items():
+            homographies[img_id] = _affine_to_matrix(*params)
 
         cost = self._compute_total_cost(added_ids, homographies)
 
@@ -146,22 +140,22 @@ class BundleAdjuster:
 
         return best_H
 
-    def _optimize_similarity(
+    def _optimize_affine(
         self,
         added_ids: set[int],
         homographies: dict[int, np.ndarray],
-    ) -> dict[int, tuple[float, float, float, float]]:
+    ) -> dict[int, tuple[float, float, float, float, float, float]]:
         base_id = self._graph.base_node
         sorted_ids = sorted(added_ids - {base_id})
         id_to_idx = {img_id: i for i, img_id in enumerate(sorted_ids)}
         n_images = len(sorted_ids)
-        n_params = n_images * 4
+        n_params = n_images * 6
 
         x0 = np.empty(n_params)
         for img_id in sorted_ids:
-            s, a, tx, ty = _matrix_to_sim(homographies[img_id])
+            a, b, c, d, tx, ty = _matrix_to_affine(homographies[img_id])
             idx = id_to_idx[img_id]
-            x0[idx * 4 : (idx + 1) * 4] = [s, a, tx, ty]
+            x0[idx * 6 : (idx + 1) * 6] = [a, b, c, d, tx, ty]
 
         edge_matches = self._cache_edge_matches(added_ids)
 
@@ -178,8 +172,8 @@ class BundleAdjuster:
                 if matched_pairs is None or len(matched_pairs) == 0:
                     continue
 
-                H1 = self._get_sim_matrix(ic.reference, base_id, sorted_ids, id_to_idx, x)
-                H2 = self._get_sim_matrix(ic.target, base_id, sorted_ids, id_to_idx, x)
+                H1 = self._get_affine_matrix(ic.reference, base_id, sorted_ids, id_to_idx, x)
+                H2 = self._get_affine_matrix(ic.target, base_id, sorted_ids, id_to_idx, x)
 
                 mask_len = min(len(ic.inlier_mask), len(matched_pairs))
                 for i in range(mask_len):
@@ -202,23 +196,25 @@ class BundleAdjuster:
             reg_weight = 0.1
             for img_id in sorted_ids:
                 idx = id_to_idx[img_id]
-                s = x[idx * 4]
-                res_list.append(reg_weight * (s - 1.0))
+                a, b, c, d = x[idx * 6 : idx * 6 + 4]
+                # Regularize: encourage similarity-like behavior (a ≈ d, b ≈ -c)
+                res_list.append(reg_weight * (a - d))
+                res_list.append(reg_weight * (b + c))
 
             return np.array(res_list, dtype=np.float64)
 
         result = least_squares(residuals, x0, method="lm", max_nfev=200)
 
-        sim_params: dict[int, tuple[float, float, float, float]] = {}
+        aff_params: dict[int, tuple[float, float, float, float, float, float]] = {}
         for img_id in sorted_ids:
             idx = id_to_idx[img_id]
-            p = result.x[idx * 4 : (idx + 1) * 4]
-            sim_params[img_id] = (p[0], p[1], p[2], p[3])
-        sim_params[base_id] = (1.0, 0.0, 0.0, 0.0)
+            p = result.x[idx * 6 : (idx + 1) * 6]
+            aff_params[img_id] = (p[0], p[1], p[2], p[3], p[4], p[5])
+        aff_params[base_id] = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
 
-        return sim_params
+        return aff_params
 
-    def _get_sim_matrix(
+    def _get_affine_matrix(
         self,
         img_id: int,
         base_id: int,
@@ -229,8 +225,8 @@ class BundleAdjuster:
         if img_id == base_id:
             return np.eye(3, dtype=np.float64)
         idx = id_to_idx[img_id]
-        s, a, tx, ty = x[idx * 4 : (idx + 1) * 4]
-        return _sim_to_matrix(s, a, tx, ty)
+        a, b, c, d, tx, ty = x[idx * 6 : (idx + 1) * 6]
+        return _affine_to_matrix(a, b, c, d, tx, ty)
 
     def _cache_edge_matches(self, added_ids: set[int]) -> dict[tuple[int, int], list[tuple[int, int]]]:
         from image_stitching import pipeline
