@@ -250,11 +250,150 @@ def _resize_image(img: np.ndarray, max_dim: int) -> np.ndarray:
 
 
 ########################
+# Multiband Blending
+########################
+N_BANDS = 5
+
+
+def _build_gaussian_pyramid(image: np.ndarray, n_levels: int) -> list[np.ndarray]:
+    pyramid = [image]
+    level = image
+    for _ in range(n_levels - 1):
+        level = cv2.pyrDown(level)
+        pyramid.append(level)
+    return pyramid
+
+
+def _build_laplacian_pyramid(image: np.ndarray, n_levels: int) -> list[np.ndarray]:
+    gaussian = _build_gaussian_pyramid(image, n_levels)
+    laplacian = []
+    for i in range(n_levels - 1):
+        up_h = gaussian[i].shape[0]
+        up_w = gaussian[i].shape[1]
+        upsampled = cv2.pyrUp(gaussian[i + 1], dstsize=(up_w, up_h))
+        diff = gaussian[i].astype(np.float64) - upsampled.astype(np.float64)
+        laplacian.append(diff)
+    laplacian.append(gaussian[-1].astype(np.float64))
+    return laplacian
+
+
+def _reconstruct_from_laplacian(laplacian: list[np.ndarray]) -> np.ndarray:
+    result = laplacian[-1]
+    for i in range(len(laplacian) - 2, -1, -1):
+        up_h = laplacian[i].shape[0]
+        up_w = laplacian[i].shape[1]
+        upsampled = cv2.pyrUp(result.astype(np.float32), dstsize=(up_w, up_h))
+        result = upsampled.astype(np.float64) + laplacian[i]
+    return result
+
+
+def _create_distance_weights(masks: list[np.ndarray]) -> list[np.ndarray]:
+    weights = []
+    for mask in masks:
+        dist = cv2.distanceTransform(mask.astype(np.uint8), cv2.DIST_L2, 0)
+        weights.append(dist.astype(np.float64))
+    return weights
+
+
+def _compute_gains(
+    warped_images: list[np.ndarray],
+    masks: list[np.ndarray],
+    graph: PanoGraph,
+) -> np.ndarray:
+    n = len(warped_images)
+    base_id = graph.base_node
+    gains = np.ones((n, 3), dtype=np.float64)
+
+    for channel in range(3):
+        rows: list[list[float]] = []
+        b_vals: list[float] = []
+
+        for u, v, attr in graph.graph.edges(data=True):
+            if u >= n or v >= n:
+                continue
+            overlap = masks[u] & masks[v]
+            if not np.any(overlap):
+                continue
+
+            u_mean = float(np.mean(warped_images[u][overlap, channel]))
+            v_mean = float(np.mean(warped_images[v][overlap, channel]))
+            if u_mean < 1e-6 or v_mean < 1e-6:
+                continue
+
+            row = [0.0] * n
+            row[u] = u_mean
+            row[v] = -v_mean
+            rows.append(row)
+            b_vals.append(0.0)
+
+        base_row = [0.0] * n
+        base_row[base_id] = 1.0
+        rows.append(base_row)
+        b_vals.append(1.0)
+
+        if len(rows) <= 1:
+            continue
+
+        A = np.array(rows, dtype=np.float64)
+        b = np.array(b_vals, dtype=np.float64)
+        solution, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
+        gains[:, channel] = np.clip(solution, 0.1, 10.0)
+
+    return gains
+
+
+def _blend_multiband(warped_images: list[np.ndarray], masks: list[np.ndarray], n_bands: int) -> np.ndarray:
+    raw_weights = _create_distance_weights(masks)
+
+    image_pyr_lists = []
+    for warped in warped_images:
+        image_pyr_lists.append(_build_laplacian_pyramid(warped.astype(np.float64), n_bands))
+
+    weight_pyr_lists = []
+    for weights in raw_weights:
+        weight_pyr_lists.append(_build_gaussian_pyramid(weights, n_bands))
+
+    blended_laplacian = []
+    for level in range(n_bands):
+        level_weights = []
+        level_images = []
+
+        for img_pyrs, w_pyrs in zip(image_pyr_lists, weight_pyr_lists):
+            level_images.append(img_pyrs[level])
+            level_weights.append(w_pyrs[level].astype(np.float64))
+
+        level_h, level_w = level_images[0].shape[:2]
+
+        resized_weights = []
+        for lw in level_weights:
+            if lw.shape[0] != level_h or lw.shape[1] != level_w:
+                lw = cv2.resize(lw, (level_w, level_h))
+            resized_weights.append(lw)
+
+        weight_sum = sum(resized_weights)
+        weight_sum[weight_sum == 0] = 1.0
+
+        blended_level = np.zeros_like(level_images[0], dtype=np.float64)
+        for rw, li in zip(resized_weights, level_images):
+            if li.ndim == 3:
+                rw = rw[:, :, np.newaxis]
+                weight_sum_b = weight_sum[:, :, np.newaxis]
+            else:
+                weight_sum_b = weight_sum
+            blended_level += (rw / weight_sum_b) * li
+        blended_laplacian.append(blended_level)
+
+    result = _reconstruct_from_laplacian(blended_laplacian)
+    return np.clip(result, 0, 255).astype(np.uint8)
+
+
+########################
 # Panorama Rendering
 ########################
 def render_panorama(
     image_paths: list[str],
     homographies: dict[int, np.ndarray],
+    graph: PanoGraph | None = None,
     output_path: str = const.OUTPUT_DIR + "panorama.jpg",
 ) -> str:
     min_x = float("inf")
@@ -304,24 +443,29 @@ def render_panorama(
             "Bundle adjustment may need stronger regularization or the scene is a full 360° loop."
         )
 
-    canvas = np.zeros((canvas_h, canvas_w, 3), dtype=np.float64)
-    weight_map = np.zeros((canvas_h, canvas_w), dtype=np.float64)
+    warped_images = []
+    masks = []
 
-    for img_id, H in homographies.items():
-        H_final = (T @ H).astype(np.float32)
+    for img_id in sorted(homographies.keys()):
+        H_final = (T @ homographies[img_id]).astype(np.float32)
         img = cv2.imread(image_paths[img_id], cv2.IMREAD_COLOR)
-        img = _resize_image(img, const.MAX_IMAGE_DIM).astype(np.float64)
+        img = _resize_image(img, const.MAX_IMAGE_DIM)
 
         warped = cv2.warpPerspective(img, H_final, (canvas_w, canvas_h))
         mask = np.any(warped > 0, axis=2)
 
-        canvas[mask] += warped[mask]
-        weight_map[mask] += 1.0
+        warped_images.append(warped)
+        masks.append(mask)
 
-    weight_map[weight_map == 0] = 1.0
-    canvas /= weight_map[:, :, np.newaxis]
-
-    final_img = np.clip(canvas, 0, 255).astype(np.uint8)
+    if len(warped_images) == 1:
+        final_img = warped_images[0]
+    else:
+        if graph is not None:
+            gains = _compute_gains(warped_images, masks, graph)
+            logger.debug(f"Per-image RGB gains: {gains.tolist()}")
+            for i, warped in enumerate(warped_images):
+                warped_images[i] = np.clip(warped.astype(np.float64) * gains[i], 0, 255).astype(np.uint8)
+        final_img = _blend_multiband(warped_images, masks, N_BANDS)
 
     gray = cv2.cvtColor(final_img, cv2.COLOR_BGR2GRAY)
     coords = cv2.findNonZero(gray)

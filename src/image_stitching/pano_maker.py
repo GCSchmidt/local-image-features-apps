@@ -58,7 +58,7 @@ class PanoMaker:
         self._bundle_result = ba.optimize()
 
         img_paths = [img._file_path for img in self._images]
-        pipeline.render_panorama(img_paths, self._bundle_result.homographies)
+        pipeline.render_panorama(img_paths, self._bundle_result.homographies, graph=self._pano_graph)
 
     def _match_images(self) -> np.ndarray:
         matches = pipeline.match_images(self._images, KNN_FOR_PANORAMA*2)
